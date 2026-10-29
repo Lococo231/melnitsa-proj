@@ -1,0 +1,4 @@
+period,production_t,start_media_t,reload_t,end_media_t,removed_media_t
+Смена 01,864,195,0,194.92,0
+Смена 02,860,194.92,0.5,195.34,0
+Смена 03,870,195.34,0,195.25,0
