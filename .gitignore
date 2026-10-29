@@ -1,0 +1,17 @@
+# Local environments and Python cache
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+# Editor and OS metadata
+.DS_Store
+.idea/
+.vscode/
+# Local generated outputs (keep tracked examples/ as demos)
+out/
+outputs/
+*.log
