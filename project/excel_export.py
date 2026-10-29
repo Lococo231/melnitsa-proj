@@ -115,6 +115,9 @@ def export_excel(cfg: dict, run: dict) -> bytes:
             ("Внутренний поток через мельницу, т/ч", run["throughput"]["mill_feed_tph"], "При возврате сепаратора"),
             ("Мощность, кВт", sum(m["power_kw"] for m in cfg["mills"]), "Из исходных параметров приводов"),
             ("Удельная энергия, кВт·ч/т", run["throughput"]["operating_specific_energy"], "Мощность / продукт"),
+            ("F80 подачи, мкм", q1["f80_um"], "Расчёт из импортированного грансостава клинкера"),
+            ("P80 продукта, мкм", q1["p80_um"], "Расчёт из модельного состава продукта"),
+            ("Wi эксплуатационный, кВт·ч/т", q1["operating_wi_kwh_t"] or 0, "Оценка по мощности, Q, F80, P80; НЕ лабораторный Bond Wi"),
             ("Наработка, ч", cfg["horizon_h"], "Состояние на конец горизонта"),
             ("Базовый износ, г/т", cfg["wear_g_t"], "КАЛИБРОВОЧНЫЙ параметр, не заводское измерение"),
             ("Показатель закона износа Δ", cfg["delta"], "0 — поверхность; 1 — модель d³"),
@@ -133,7 +136,10 @@ def export_excel(cfg: dict, run: dict) -> bytes:
         base = 3 + len(inputs) + 2
         summary.write_string(base, 0, "Расчётный удельный расход по периоду, г/т")
         # 0-based: B4 -> выпуск Q, B8 -> наработка, B13 -> масса износа, т
-        summary.write_formula(base, 1, "=IFERROR(B13*1000000/(B4*B8),0)", report.emphasis)
+        # Прямой расчёт вместо ссылки на фиксированные строки (список сводки изменяется).
+        production=run["throughput"]["product_tph"]*cfg["horizon_h"]
+        actual_g_t=run["total_wear_t"]*1_000_000/production if production>0 else 0
+        summary.write_number(base,1,actual_g_t,report.emphasis)
         summary.merge_range(base + 2, 0, base + 2, 5,
                             "Примечание: прогнозные графики — результаты расчёта, не данные АСУ ТП.")
         summary.set_row(base + 2, 29)
@@ -190,7 +196,7 @@ def export_excel(cfg: dict, run: dict) -> bytes:
         sh, cols, n = report.sheet("Диаграмма_помола", probes)
         if n > 2:
             x = cols.index("Расстояние по камерам, м") if "Расстояние по камерам, м" in cols else 1
-            series = [(cols.index(label), label) for label in ("R0.08, %", "R0.045, %") if label in cols]
+            series = [(cols.index(f"R{x:g}, %"),f"R{x:g}") for x in cfg.get("sieves_mm",[.08,.045]) if f"R{x:g}, %" in cols][:8]
             report.line(sh, "Полные остатки по длине камер", x, series, n,
                         "N2", x_label="Расстояние, м", y_label="%")
 
@@ -198,7 +204,8 @@ def export_excel(cfg: dict, run: dict) -> bytes:
         for drum, mill in enumerate(cfg["mills"], 1):
             for chamber, ch in enumerate(mill["chambers"], 1):
                 geometry.append({"Барабан": drum, "Название": mill["name"],
-                                 "Диаметр, м": mill["diameter_m"],
+                                 "Диаметр барабана, м": mill["diameter_m"],
+                                 "Внутренний диаметр камеры, м":ch.get("diameter_m",mill["diameter_m"]),
                                  "Длина барабана, м": mill["length_m"],
                                  "Камера": chamber, "Длина камеры, м": ch["length_m"],
                                  "Обороты, об/мин": mill["rpm"],

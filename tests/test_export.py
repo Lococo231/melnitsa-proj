@@ -17,4 +17,5 @@ def test_excel_export_has_data_and_charts():
         sheets = [name for name in files if name.startswith("xl/worksheets/sheet") and name.endswith(".xml")]
         assert len(charts) == 9
         assert len(sheets) == 11
-        assert b"B13*1000000/(B4*B8)" in archive.read("xl/worksheets/sheet1.xml")
+        assert b"F80" in archive.read("xl/sharedStrings.xml")
+        assert b"P80" in archive.read("xl/sharedStrings.xml")

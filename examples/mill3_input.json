@@ -9,10 +9,12 @@
       "diaphragm_m": 0.5,
       "chambers": [
         {
-          "length_m": 6.265
+          "length_m": 6.265,
+          "diameter_m": 4.0
         },
         {
-          "length_m": 6.635
+          "length_m": 6.635,
+          "diameter_m": 4.0
         }
       ]
     }
@@ -129,9 +131,7 @@
   "abrasion_factor": 1.0,
   "moisture_pct": 0.8,
   "temperature_c": 95.0,
-  "work_index_kwh_t": 16.0,
-  "f80_um": 12000.0,
-  "p80_um": 75.0,
+  "work_index_kwh_t": null,
   "grindability": 1.0,
   "feed_fraction": [
     0,
@@ -162,5 +162,16 @@
   "horizon_h": 1000.0,
   "step_h": 10.0,
   "reload_threshold_pct": 3.0,
-  "manual_reloads": []
+  "manual_reloads": [],
+  "sieves_mm": [
+    40.0,
+    20.0,
+    10.0,
+    5.0,
+    2.5,
+    1.25,
+    0.63,
+    0.08,
+    0.045
+  ]
 }

@@ -31,7 +31,7 @@ def media_row(drum: int, chamber: int, size_mm: float, tons: float,
 
 
 def default_config() -> dict:
-    """Иллюстративные данные, геометрия/массы перенесены из прежней HTML-модели №3."""
+    """Пример для одного барабана с двумя камерами; свойства клинкера условные."""
     rows = []
     for size, tons in [(90,3.0),(80,20.82),(70,23.0),(60,25.175),(50,18.0),(40,0)]:
         if tons: rows.append(media_row(1,1,size,tons))
@@ -40,15 +40,15 @@ def default_config() -> dict:
     return dict(
         mills=[dict(name="Мельница №3", diameter_m=4.0, length_m=13.4,
                     rpm=16.0, power_kw=2400.0, diaphragm_m=0.5,
-                    chambers=[dict(length_m=6.265),dict(length_m=6.635)])],
+                    chambers=[dict(length_m=6.265,diameter_m=4.0),dict(length_m=6.635,diameter_m=4.0)])],
         media=rows,
         throughput_mode="Измеренная подача, т/ч", fresh_feed_tph=72.0,
         measured_total_t=720.0, measured_hours=10.0,
         specific_energy_kwh_t=32.0, recycle_ratio=0.0,
         material_hold_t=18.0, feed_bulk_density=DEFAULT_DENSITY,
         abrasion_factor=1.0, moisture_pct=0.8, temperature_c=95.,
-        work_index_kwh_t=16.0, f80_um=12000., p80_um=75.,
-        grindability=1.0, feed_fraction=list(FEED_PRESET),
+        work_index_kwh_t=None,
+        grindability=1.0, feed_fraction=list(FEED_PRESET), sieves_mm=[40.,20.,10.,5.,2.5,1.25,.63,.08,.045],
         wear_g_t=90.0, delta=0.0, wear_ref_rpm_fraction=0.76,
         power_exponent=0.45, speed_exponent=0.7, loading_exponent=0.35, feed_coarseness_exponent=0.2, hardness_exponent=0.25,
         retention_mm=7.0, wear_reference_fill=0.30,
@@ -59,27 +59,41 @@ def default_config() -> dict:
 
 
 def validate(cfg: dict) -> None:
-    if not cfg.get("mills") or len(cfg["mills"]) > 2:
-        raise ValueError("Задайте 1 или 2 самостоятельных барабана")
+    if len(cfg.get("mills",[])) != 1:
+        raise ValueError("В модели предусмотрен один барабан с одной или двумя камерами")
     for d, mill in enumerate(cfg["mills"], 1):
         if not 1 <= mill["diameter_m"] <= 10 or not 1 <= mill["length_m"] <= 50:
             raise ValueError(f"Барабан {d}: проверьте диаметр и длину")
         if not 0 < mill["rpm"] <= 40 or not 0 <= mill["power_kw"] <= 30000:
             raise ValueError(f"Барабан {d}: некорректные обороты или мощность")
+        if len(mill["chambers"]) not in (1,2):
+            raise ValueError("В барабане должна быть одна или две камеры")
         lengths = sum(ch["length_m"] for ch in mill["chambers"])
         diaphragm = (len(mill["chambers"])-1)*mill["diaphragm_m"]
         if any(ch["length_m"] <= 0 for ch in mill["chambers"]):
             raise ValueError(f"Барабан {d}: длина камеры должна быть положительной")
+        for ch in mill["chambers"]:
+            effective_d = ch.get("diameter_m",mill["diameter_m"])
+            if not (0 < effective_d <= mill["diameter_m"]):
+                raise ValueError("Внутренний диаметр камеры должен быть > 0 и не больше диаметра барабана")
         if abs(lengths+diaphragm-mill["length_m"]) > 0.011:
             raise ValueError(f"Барабан {d}: сумма длин камер и перегородок должна равняться длине барабана")
     for x in cfg["media"]:
         if x["material"] not in MATERIALS or x["type"] not in ("Шары", "Цильпебс"):
             raise ValueError("Неизвестный материал или тип мелющего тела")
         di, ch = int(x["drum"]), int(x["chamber"])
-        if di < 1 or di > len(cfg["mills"]) or ch < 1 or ch > len(cfg["mills"][di-1]["chambers"]):
+        if di != 1 or ch < 1 or ch > len(cfg["mills"][0]["chambers"]):
             raise ValueError("Фракция привязана к несуществующей камере")
         if x["diameter_mm"] <= 0 or x["initial_t"] < 0 or x.get("aspect",1) <= 0:
             raise ValueError("Проверьте размер и массу фракций")
+    sieves=cfg.get("sieves_mm",SIEVES)
+    if not sieves or len(sieves)>20 or any(not isinstance(x,(int,float)) or not math.isfinite(x) or not 0.01<=x<=80 for x in sieves) or len(sieves)!=len(set(sieves)):
+        raise ValueError("Выберите от 1 до 20 разных сит в диапазоне 0,01–80 мм")
+    for rr in cfg.get("manual_reloads",[]):
+        if int(rr["drum"])!=1 or int(rr["chamber"])>len(cfg["mills"][0]["chambers"]) or int(rr["chamber"])<1:
+            raise ValueError("Догрузка должна относиться к существующей камере одного барабана")
+        if rr["tons"]<=0 or rr["diameter_mm"]<=0 or rr["type"] not in ("Шары","Цильпебс") or rr["material"] not in MATERIALS:
+            raise ValueError("Неверная масса, диаметр, тип или материал догрузки")
     if not 0.01 <= cfg["step_h"] <= 1000 or not 0 <= cfg["horizon_h"] <= 100000:
         raise ValueError("Неверный шаг или горизонт расчёта")
     if cfg["recycle_ratio"] < 0 or cfg["material_hold_t"] <= 0:
@@ -100,15 +114,7 @@ def throughput(cfg:dict) -> dict:
     elif mode == "Масса / время":
         if cfg["measured_hours"] <= 0: raise ValueError("Время измерения должно быть >0")
         q = cfg["measured_total_t"] / cfg["measured_hours"]
-    elif mode == "По мощности и удельной энергии":
-        e = float(cfg["specific_energy_kwh_t"])
-        if e <= 0: raise ValueError("Удельная энергия должна быть >0")
-        q = sum(m["power_kw"] for m in cfg["mills"]) / e
-    elif mode == "По мощности и Бонду (оценка)":
-        f, p, wi = cfg["f80_um"], cfg["p80_um"], cfg["work_index_kwh_t"]
-        if p <= 0 or f <= p or wi <= 0: raise ValueError("Должно выполняться F80 > P80 > 0; Wi > 0")
-        e = 10*wi*(1/math.sqrt(p)-1/math.sqrt(f))
-        q = sum(m["power_kw"] for m in cfg["mills"]) / e
+
     else:
         raise ValueError("Неизвестный способ определения производительности")
     if not math.isfinite(q) or q <= 0 or q > 20000: raise ValueError("Производительность должна быть >0 и <20000 т/ч")
@@ -117,7 +123,7 @@ def throughput(cfg:dict) -> dict:
 
 
 def volume_m3(mill: dict, chamber: int) -> float:
-    return math.pi*mill["diameter_m"]**2/4*mill["chambers"][chamber-1]["length_m"]
+    return math.pi*mill["chambers"][chamber-1].get("diameter_m",mill["diameter_m"])**2/4*mill["chambers"][chamber-1]["length_m"]
 
 
 def mass_kg(row:dict, diameter:float) -> float:
@@ -157,7 +163,7 @@ def chamber_info(cfg:dict, cohorts:list[dict]) -> list[dict]:
             # Более плотная укладка цильпебса и смешанной загрузки — упрощение
             p = 0.62 if sub and sum(cohort_mass(c) for c in sub if c["type"]=="Цильпебс")/max(mass,1)>0.5 else 0.585
             jfill=solid/p/volume_m3(m,j)
-            out.append(dict(drum=i,chamber=j,length_m=ch["length_m"],diameter_m=m["diameter_m"],
+            out.append(dict(drum=i,chamber=j,length_m=ch["length_m"],diameter_m=ch.get("diameter_m",m["diameter_m"]),
                             rpm=m["rpm"],power_kw=m["power_kw"],volume_m3=volume_m3(m,j),
                             fill_j=jfill, mass_t=mass/1000,
                             mean_d_mm=sum(cohort_mass(c)*c["d"] for c in sub)/max(mass,1e-9),
@@ -169,7 +175,7 @@ def factors(cfg:dict, cohort:dict, chambers:list[dict]) -> float:
     """Эмпирические множители: обязательно подгоняются по заводским данным."""
     mill=cfg["mills"][cohort["drum"]-1]
     ch=next(x for x in chambers if x["drum"]==cohort["drum"] and x["chamber"]==cohort["chamber"])
-    crit=42.3/math.sqrt(mill["diameter_m"])
+    crit=42.3/math.sqrt(ch["diameter_m"])
     frac=mill["rpm"]/crit
     speed=(max(frac,.01)/cfg["wear_ref_rpm_fraction"])**cfg["speed_exponent"]
     fill=(max(ch["fill_j"],0.01)/cfg["wear_reference_fill"])**cfg["loading_exponent"]
@@ -371,6 +377,27 @@ def media_impact(cohorts:list[dict], grain_mm:float)->float:
     return s/total
 
 
+def size_at_pass_percent(comp:list[float], passing_pct:float=80.0) -> float:
+    """Размер в мкм из модельных интервальных фракций, с лог-интерполяцией."""
+    if not 0 < passing_pct < 100: raise ValueError("Доля прохода должна быть от 0 до 100%")
+    total=sum(comp)
+    if total<=0: raise ValueError("Пустой гранулометрический состав")
+    threshold=100.0-passing_pct
+    lo,hi=0.01,80.0
+    for _ in range(80):
+        mid=math.sqrt(lo*hi)
+        ret=100*cumulative_residue(comp,mid)/total
+        if ret>threshold:lo=mid
+        else:hi=mid
+    return math.sqrt(lo*hi)*1000.0
+
+
+def operating_bond_index(power_kw:float,product_tph:float,f80_um:float,p80_um:float) -> float|None:
+    """Эксплуатационный Wi, НЕ лабораторный Bond Ball Mill Work Index."""
+    if min(power_kw,product_tph,f80_um,p80_um)<=0 or p80_um>=f80_um:return None
+    denom=10*(1/math.sqrt(p80_um)-1/math.sqrt(f80_um))
+    return (power_kw/product_tph)/denom if denom>0 else None
+
 def quality_at(cfg:dict, cohorts:list[dict], samples:int=14) -> dict:
     """Демонстрационная кинетическая схема; не выдаёт лабораторный результат без калибровки."""
     infos=chamber_info(cfg,cohorts)
@@ -382,7 +409,10 @@ def quality_at(cfg:dict, cohorts:list[dict], samples:int=14) -> dict:
     pts=[dict(position_m=0.0,comp=comps.copy())]
     x=0.0
     grain_dist=[fragmentation(i) for i in range(10)]
-    for z in infos:
+    for z_index,z in enumerate(infos):
+        if z_index:
+            x+=cfg["mills"][0]["diaphragm_m"]
+            pts.append(dict(position_m=x,comp=comps.copy(),drum=1,chamber=z["chamber"]))
         fraction=z["volume_m3"]/total_v
         steps=max(30,math.ceil(samples*z["length_m"]/total_L)*5)
         tm=residence_min*fraction
@@ -405,13 +435,16 @@ def quality_at(cfg:dict, cohorts:list[dict], samples:int=14) -> dict:
             pts.append(dict(position_m=x,comp=comps.copy(),drum=z["drum"],chamber=z["chamber"]))
     sample_pts=[]
     for i in range(samples):
-        pos=0.25+i*(max(0.3,total_L-0.5))/(samples-1)
+        pos=0.25+i*(max(0.3,cfg["mills"][0]["length_m"]-0.5))/(samples-1)
         p=min(pts,key=lambda r:abs(r["position_m"]-pos))
         sample_pts.append({"Точка":i+1,"Расстояние по камерам, м":round(pos,3),
                            "Барабан":p.get("drum",1),"Камера":p.get("chamber",1),
-                           **{f"R{s:g}, %":round(cumulative_residue(p["comp"],s),3) for s in SIEVES}})
+                           **{f"R{s:g}, %":round(cumulative_residue(p["comp"],s),3) for s in sorted(cfg.get("sieves_mm",SIEVES),reverse=True)}})
     final=pts[-1]["comp"]
-    return {"samples":sample_pts,"product_fractions":final,"r008":cumulative_residue(final,.08),
+    f80=size_at_pass_percent(cfg["feed_fraction"])
+    p80=size_at_pass_percent(final)
+    op_wi=operating_bond_index(cfg["mills"][0]["power_kw"],throughput(cfg)["product_tph"],f80,p80)
+    return {"samples":sample_pts,"product_fractions":final,"f80_um":f80,"p80_um":p80,"operating_wi_kwh_t":op_wi,"r008":cumulative_residue(final,.08),
             "r0045":cumulative_residue(final,.045),
             "blaine_proxy":cfg["lab_blaine_base"]+cfg["lab_blaine_scale"]*final[-1],
             "residence_min":residence_min,"chambers":infos}
