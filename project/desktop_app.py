@@ -18,7 +18,8 @@ from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from matplotlib.figure import Figure
 
 from model import (CLASSES, MATERIALS, SIEVES, default_config, validate, throughput,
-                   simulate_wear, quality_at, initial_cohorts, recommends, size_at_pass_percent, lab_bond_from_config)
+                   throughput_at, config_at_time, simulate_wear, quality_at, initial_cohorts,
+                   recommends, size_at_pass_percent, lab_bond_from_config)
 from excel_export import export_excel
 from calibration import parse_history_csv, summarize_history
 
@@ -54,6 +55,7 @@ FIELDS = {
 MODES = ['Измеренная подача, т/ч','Масса / время']
 MEDIA_FIELDS = [('chamber','Камера'),('type','Тип'),('material','Материал'),
                 ('diameter_mm','Диаметр, мм'),('initial_t','Масса, т'),('aspect','L/D цильпебса')]
+THROUGHPUT_FIELDS = [('hour','Начало, ч'),('tph','Подача, т/ч')]
 RELOAD_FIELDS = [('hour','Час догрузки'),('chamber','Камера'),('type','Тип'),
                  ('material','Материал'),('diameter_mm','Диаметр, мм'),
                  ('tons','Добавить, т'),('aspect','L/D цильпебса')]
@@ -159,7 +161,13 @@ class DesktopApp(tk.Tk):
         self.mill_forms=[]
         self.metric_vars=[tk.StringVar(value='—') for _ in range(5)]
         self.status_var=tk.StringVar(value='Демонстрационные данные — не результаты измерений предприятия')
+        self._suspend_auto=True
+        self._auto_job=None
+        self._cell_editor=None
         self._make_layout()
+        for var in self.fields_vars.values():
+            var.trace_add('write',lambda *_:self._schedule_calculation())
+        self._suspend_auto=False
         self.load_config(self.config_data,calculate=True)
 
     def _setup_style(self):
@@ -306,7 +314,7 @@ class DesktopApp(tk.Tk):
     def _make_overview(self):
         strip=ttk.Frame(self.overview_frame,padding=12)
         strip.pack(fill='x')
-        captions=['Поток, т/ч','Износ за период, т','Масса загрузки, т','R0,08 в конце, %','Блейн-прокси, см²/г']
+        captions=['Подача в начале, т/ч','Износ за период, т','Масса загрузки, т','R0,08 в конце, %','Блейн-прокси, см²/г']
         cards=[]
         for label,var in zip(captions,self.metric_vars):
             card=ttk.Frame(strip)
@@ -326,7 +334,8 @@ class DesktopApp(tk.Tk):
         self.fig_overview,self.canvas_overview=self._graph(self.overview_frame,(9,6))
         self.derived_var=tk.StringVar(value='F80: —  |  P80: —  |  Wi эксплуатации: —')
         ttk.Label(self.overview_frame,textvariable=self.derived_var,foreground=ACCENT,wraplength=1050).pack(anchor='w',padx=14,pady=6)
-        ttk.Label(self.overview_frame,text='Wi эксплуатации — оценка по мощности, потоку и F80/P80; лабораторный Wi отображается на вкладке «Подача и клинкер».',foreground=MUTED,wraplength=850).pack(anchor='w',padx=14,pady=6)
+        ttk.Label(self.overview_frame,text='Средний Ø — средневзвешенный диаметр мелющих тел, а не диаметр самой камеры: при истирании он уменьшается, после догрузки может увеличиться. Q(t) изменяется только по заданному графику подачи.',foreground=MUTED,wraplength=850).pack(anchor='w',padx=14,pady=5)
+        ttk.Label(self.overview_frame,text='Wi эксплуатации — оценка по мощности, потоку и F80/P80; лабораторный Wi отображается в разделе «Подача и клинкер».',foreground=MUTED,wraplength=850).pack(anchor='w',padx=14,pady=5)
         ttk.Label(self.overview_frame,text='Модель исследовательская: коэффициенты и Блейн-прокси требуют проверки по измерениям предприятия.',foreground=MUTED).pack(anchor='w',padx=14,pady=6)
 
     def _graph(self,parent,figsize):
@@ -363,16 +372,26 @@ class DesktopApp(tk.Tk):
         return t
 
     def _make_records(self,frame,kind,fields):
-        ttk.Label(frame,text='Одна строка — отдельная фракция или операция; данные редактируются до расчёта.',foreground=MUTED).pack(anchor='w',pady=(0,8))
+        if kind=='media':
+            hint='Двойной щелчок — изменить фракцию.'
+        else:
+            hint='Добавить строку → дважды щёлкнуть ячейку для редактирования; Enter — сохранить, Tab — следующее поле.'
+        ttk.Label(frame,text=hint,foreground=MUTED,wraplength=460).pack(anchor='w',pady=(0,8))
         buttons=ttk.Frame(frame)
         buttons.pack(fill='x',pady=(0,5))
-        ttk.Button(buttons,text='+ Добавить',command=lambda:self.edit_record(kind)).pack(side='left',padx=3)
-        ttk.Button(buttons,text='Изменить',command=lambda:self.edit_record(kind,True)).pack(side='left',padx=3)
+        add=lambda:self.edit_record(kind) if kind=='media' else self.add_inline_row(kind)
+        ttk.Button(buttons,text='+ Добавить строку',command=add).pack(side='left',padx=3)
+        if kind=='media':
+            ttk.Button(buttons,text='Изменить',command=lambda:self.edit_record(kind,True)).pack(side='left',padx=3)
         ttk.Button(buttons,text='Удалить',command=lambda:self.delete_record(kind)).pack(side='left',padx=3)
         tree=self._tree(frame,[label for _,label in fields])
-        tree.bind('<Double-1>',lambda _:self.edit_record(kind,True))
-        if kind=='media':self.media_tree=tree
-        else:self.reload_tree=tree
+        if kind=='media':
+            tree.bind('<Double-1>',lambda _:self.edit_record(kind,True))
+            self.media_tree=tree
+        else:
+            if kind=='manual_reloads':self.reload_tree=tree
+            else:self.schedule_tree=tree
+            tree.bind('<Double-1>',lambda event:self._edit_table_cell(event,kind))
 
     def _make_sieves(self):
         root=self.sieves_page.inner
@@ -397,7 +416,7 @@ class DesktopApp(tk.Tk):
         for x in all_sizes:
             v=tk.BooleanVar(value=x in selected)
             self.sieve_vars[x]=v
-            ttk.Checkbutton(self.sieve_list,text=f'Сито №{x:g} мм',variable=v).pack(anchor='w',pady=3)
+            ttk.Checkbutton(self.sieve_list,text=f'Сито №{x:g} мм',variable=v,command=self._schedule_calculation).pack(anchor='w',pady=3)
 
     def add_sieve(self):
         try:
@@ -406,6 +425,7 @@ class DesktopApp(tk.Tk):
             selected=[x for x,v in self.sieve_vars.items() if v.get()]
             if value not in selected:selected.append(value)
             self._load_sieves(selected)
+            self._schedule_calculation()
         except ValueError as exc:messagebox.showerror('Некорректное сито',str(exc),parent=self)
 
     @staticmethod
@@ -489,7 +509,10 @@ class DesktopApp(tk.Tk):
                 self._refresh_records()
                 if removed:
                     self.status_var.set(f'При переходе на одну камеру удалены {removed} фракций II камеры. Сохраните JSON при необходимости.')
-        combo.bind('<<ComboboxSelected>>',on_change)
+        combo.bind('<<ComboboxSelected>>',lambda event:(on_change(event),self._schedule_calculation()))
+        for key,var in fields.items():
+            if isinstance(var,tk.StringVar) and key!='chcount':
+                var.trace_add('write',lambda *_:self._schedule_calculation())
         toggle()
         fields['chcount']=count
         self.mill_forms.append(fields)
@@ -533,6 +556,11 @@ class DesktopApp(tk.Tk):
             ttk.Label(box,text='Wi рассчитывается до эксплуатации только по импортированному лабораторному протоколу Бонда (P1, Gpr, F80, P80), а не по размерам барабана.',
                       wraplength=450,foreground=MUTED).grid(row=134,column=0,columnspan=2,sticky='w',pady=6)
             ttk.Button(box,text='Импорт лаборатории JSON…',command=self.open_lab_test).grid(row=135,column=0,columnspan=2,sticky='ew',pady=8)
+            timetable=ttk.LabelFrame(box,text='Подача по времени (необязательно)',padding=7)
+            timetable.grid(row=140,column=0,columnspan=2,sticky='ew',pady=9)
+            ttk.Label(timetable,text='По умолчанию подача постоянна. Чтобы она менялась на графике, добавьте интервалы с измеренной Q, т/ч.',
+                      foreground=MUTED,wraplength=390).pack(anchor='w',pady=5)
+            self._make_records(timetable,'throughput_schedule',THROUGHPUT_FIELDS)
         else:
             ttk.Separator(box,orient='horizontal').grid(row=30,columnspan=2,sticky='ew',pady=12)
             ttk.Label(box,text='Калибровка износа (из импортированных данных)',foreground=ACCENT,
@@ -605,25 +633,33 @@ class DesktopApp(tk.Tk):
         cfg['sieves_mm']=sorted((float(x) for x,v in self.sieve_vars.items() if v.get()),reverse=True)
         cfg['media']=deepcopy(self.config_data['media'])
         cfg['manual_reloads']=deepcopy(self.config_data.get('manual_reloads',[]))
+        cfg['throughput_schedule']=deepcopy(self.config_data.get('throughput_schedule',[]))
         is_valid_input(cfg)
         return cfg
 
     def load_config(self,cfg,calculate=False):
         is_valid_input(cfg)
-        self.config_data=deepcopy(cfg)
-        self._render_mills(cfg['mills'])
-        for key,var in self.fields_vars.items():var.set(str(cfg.get(key,'')))
-        for var,value in zip(self.feed_vars,cfg['feed_fraction']):var.set(str(value))
-        self._load_sieves(cfg.get('sieves_mm',SIEVES))
-        self._refresh_records()
-        self._update_lab_labels(cfg)
-        self.run_data=None
-        self.quality=None
+        self._cancel_auto()
+        self._suspend_auto=True
+        try:
+            self.config_data=deepcopy(cfg)
+            self.config_data.setdefault('throughput_schedule',[])
+            self._render_mills(cfg['mills'])
+            for key,var in self.fields_vars.items():var.set(str(cfg.get(key,'')))
+            for var,value in zip(self.feed_vars,cfg['feed_fraction']):var.set(str(value))
+            self._load_sieves(cfg.get('sieves_mm',SIEVES))
+            self._refresh_records()
+            self._update_lab_labels(cfg)
+            self.run_data=None
+            self.quality=None
+        finally:
+            self._suspend_auto=False
         if calculate:self.calculate()
 
     def _refresh_records(self):
         for tree,kind,fields in [(self.media_tree,'media',MEDIA_FIELDS),
-                                 (self.reload_tree,'manual_reloads',RELOAD_FIELDS)]:
+                                 (self.reload_tree,'manual_reloads',RELOAD_FIELDS),
+                                 (self.schedule_tree,'throughput_schedule',THROUGHPUT_FIELDS)]:
             tree.delete(*tree.get_children())
             for index,r in enumerate(self.config_data.get(kind,[])):
                 tree.insert('', 'end',iid=str(index),values=[fmt(r.get(key,'')) for key,_ in fields])
@@ -646,18 +682,136 @@ class DesktopApp(tk.Tk):
                 is_valid_input(self.collect_config()|{kind:trial[kind]})
                 self.config_data[kind]=trial[kind]
                 self._refresh_records()
-                self.status_var.set('Данные изменены. Нажмите «Рассчитать» для обновления прогноза.')
+                self._schedule_calculation()
             except Exception as exc:
                 raise ValueError(str(exc)) from exc
         RecordDialog(self,'Изменить строку' if existing else 'Добавить строку',fields,defaults,save,len(self._collect_mills()[0]['chambers']))
 
+    def _cancel_auto(self):
+        if self._auto_job is not None:
+            try:self.after_cancel(self._auto_job)
+            except tk.TclError:pass
+            self._auto_job=None
+
+    def _schedule_calculation(self):
+        """Одно вычисление после серии правок; неполный ввод не вызывает диалогов."""
+        if self._suspend_auto:return
+        self._cancel_auto()
+        self._auto_job=self.after(650, self._run_auto)
+
+    def _run_auto(self):
+        self._auto_job=None
+        self.calculate(quiet=True)
+
+    def _tree_for_kind(self,kind):
+        if kind=='media':return self.media_tree,MEDIA_FIELDS
+        if kind=='manual_reloads':return self.reload_tree,RELOAD_FIELDS
+        return self.schedule_tree,THROUGHPUT_FIELDS
+
+    def add_inline_row(self,kind):
+        """Добавить запись с допустимыми параметрами, редактирование внутри таблицы."""
+        try:
+            cfg=self.collect_config()
+            if kind=='manual_reloads':
+                chamber_count=len(cfg['mills'][0]['chambers'])
+                choice=next((r for r in cfg['media'] if r['chamber']==chamber_count),cfg['media'][0] if cfg['media'] else None)
+                if choice is None:raise ValueError('Добавьте хотя бы одну фракцию мелющих тел')
+                row={'drum':1,'hour':round(cfg['horizon_h']/2,1),'chamber':choice['chamber'],
+                     'type':choice['type'],'material':choice['material'],'diameter_mm':choice['diameter_mm'],
+                     'tons':0.5,'aspect':choice.get('aspect',1.0)}
+            else:
+                t=round(cfg['horizon_h']/2,1)
+                occupied={r['hour'] for r in cfg.get('throughput_schedule',[])}
+                while t in occupied:t+=1
+                if t>cfg['horizon_h']:t=0.
+                if t in occupied:raise ValueError('Удалите или отредактируйте существующее изменение подачи')
+                row={'hour':t,'tph':throughput_at(cfg,t)}
+            trial=deepcopy(cfg)
+            trial[kind].append(row)
+            is_valid_input(trial)
+            self.config_data[kind]=trial[kind]
+            self._refresh_records()
+            tree,fields=self._tree_for_kind(kind)
+            iid=str(len(trial[kind])-1)
+            tree.selection_set(iid)
+            tree.focus(iid)
+            tree.see(iid)
+            self._schedule_calculation()
+            self.after(40,lambda:self._open_cell_editor(kind,iid,0))
+        except Exception as exc:
+            messagebox.showerror('Добавить строку',str(exc),parent=self)
+
+    def _edit_table_cell(self,event,kind):
+        tree,_=self._tree_for_kind(kind)
+        iid=tree.identify_row(event.y)
+        col=tree.identify_column(event.x)
+        if not iid or not col:return
+        self._open_cell_editor(kind,iid,int(col[1:])-1)
+
+    def _open_cell_editor(self,kind,iid,column):
+        tree,fields=self._tree_for_kind(kind)
+        if self._cell_editor is not None:
+            self._cell_editor.destroy()
+            self._cell_editor=None
+        if not tree.exists(iid) or column<0 or column>=len(fields):return
+        bbox=tree.bbox(iid,f'#{column+1}')
+        if not bbox:
+            if not tree.winfo_ismapped():return
+            tree.see(iid)
+            self.after(45,lambda:self._open_cell_editor(kind,iid,column))
+            return
+        key=fields[column][0]
+        row=self.config_data[kind][int(iid)]
+        x,y,w,h=bbox
+        var=tk.StringVar(value=fmt(row.get(key,'')))
+        if key=='type':
+            editor=ttk.Combobox(tree,textvariable=var,values=['Шары','Цильпебс'],state='readonly')
+        elif key=='material':
+            editor=ttk.Combobox(tree,textvariable=var,values=list(MATERIALS),state='readonly')
+        elif key=='chamber':
+            editor=ttk.Combobox(tree,textvariable=var,values=[str(i+1) for i in range(len(self._collect_mills()[0]['chambers']))],state='readonly')
+        else:editor=ttk.Entry(tree,textvariable=var)
+        editor.place(x=x,y=y,width=max(60,w),height=h)
+        self._cell_editor=editor
+        done=[False]
+        def commit(event=None,next_column=None):
+            if done[0]:return
+            try:
+                raw=var.get().strip().replace(',','.')
+                value=raw if key in ('type','material') else int(float(raw)) if key=='chamber' else float(raw)
+                if isinstance(value,float) and not math.isfinite(value):raise ValueError('Требуется конечное число')
+                config=self.collect_config()
+                config[kind][int(iid)][key]=value
+                is_valid_input(config)
+                done[0]=True
+                self.config_data[kind]=config[kind]
+                editor.destroy()
+                self._cell_editor=None
+                self._refresh_records()
+                self._schedule_calculation()
+                if next_column is not None and next_column<len(fields):
+                    self.after(40,lambda:self._open_cell_editor(kind,iid,next_column))
+            except Exception as exc:
+                self.status_var.set(f'Некорректная ячейка «{fields[column][1]}»: {exc}')
+                editor.focus_set()
+        def cancel(event=None):
+            done[0]=True
+            editor.destroy()
+            self._cell_editor=None
+        editor.bind('<Return>',commit)
+        editor.bind('<Tab>',lambda e:(commit(next_column=column+1),'break')[1])
+        editor.bind('<Escape>',cancel)
+        editor.focus_set()
+        if isinstance(editor,ttk.Entry):editor.select_range(0,'end')
+        if isinstance(editor,ttk.Combobox):editor.bind('<<ComboboxSelected>>',commit)
+
     def delete_record(self,kind):
-        tree=self.media_tree if kind=='media' else self.reload_tree
+        tree,_=self._tree_for_kind(kind)
         selected=tree.selection()
         if not selected:return
         self.config_data[kind].pop(int(selected[0]))
         self._refresh_records()
-        self.status_var.set('Строка удалена. Пересчитайте прогноз.')
+        self._schedule_calculation()
 
     def open_json(self):
         path=filedialog.askopenfilename(parent=self,title='Импорт параметров мельницы',
@@ -705,21 +859,22 @@ class DesktopApp(tk.Tk):
             self.load_config(default_config(),calculate=True)
             self.status_var.set('Демонстрационная конфигурация восстановлена')
 
-    def calculate(self):
+    def calculate(self,quiet=False):
+        self._cancel_auto()
         try:
             cfg=self.collect_config()
             run=simulate_wear(cfg)
-            quality=quality_at(cfg,run['cohorts'])
+            quality=quality_at(config_at_time(cfg,cfg['horizon_h']),run['cohorts'])
             recommendation=recommends(cfg,run)
             self.config_data=deepcopy(cfg)
             self.run_data=run
             self.quality=quality
             self._render_results(cfg,run,quality,recommendation)
             self._update_lab_labels(cfg)
-            self.status_var.set(f"Расчёт завершён: {len(run['rows'])} шагов, {len(recommendation)} предложений догрузки. Износ и Блейн — расчётный прогноз.")
+            self.status_var.set(f"Графики обновлены: {len(run['rows'])} шагов; догрузок: {len(run['reload_events'])}. Q изменяется только по заданной подаче, не автоматически от износа.")
         except Exception as e:
-            messagebox.showerror('Ошибка расчёта',str(e),parent=self)
-            self.status_var.set('Не удалось выполнить расчёт: проверьте входные параметры')
+            if not quiet:messagebox.showerror('Ошибка расчёта',str(e),parent=self)
+            self.status_var.set('Исправьте параметры для обновления графиков: '+str(e))
 
     def _render_results(self,cfg,run,quality,recommendation):
         end=run['rows'][-1]
@@ -735,16 +890,24 @@ class DesktopApp(tk.Tk):
         self._populate(self.sample_tree,quality['samples'],probe_cols)
         x=[r['hours'] for r in run['rows']]
         self.fig_overview.clear()
-        a=self.fig_overview.subplots(2,2)
+        a=self.fig_overview.subplots(2,3)
         self._style_axes(a[0,0],'Накопленный износ, т',ylabel='т')
         a[0,0].plot(x,[r['loss_t'] for r in run['rows']],color='#61c7dc',lw=2)
         self._style_axes(a[0,1],'Масса загрузки, т',ylabel='т')
         a[0,1].plot(x,[r['total_media_t'] for r in run['rows']],color='#e8af63',lw=2)
-        self._style_axes(a[1,0],'Удельный расход всей загрузки, г/т',ylabel='г/т')
-        a[1,0].plot(x,[r['Вся загрузка, г/т'] for r in run['coefficient_history']],color='#89c992',lw=2)
-        self._style_axes(a[1,1],'Средний диаметр камеры I, мм',ylabel='мм')
-        a[1,1].plot(x,[r['Б1К1 Dср, мм'] for r in run['rows']],color='#d5a6ee',lw=2)
-        self.fig_overview.subplots_adjust(hspace=.55,wspace=.3,left=.10,right=.96,bottom=.12,top=.92)
+        self._style_axes(a[0,2],'Удельный износ, г/т',ylabel='г/т')
+        a[0,2].plot(x,[r['Вся загрузка, г/т'] for r in run['coefficient_history']],color='#89c992',lw=2)
+        self._style_axes(a[1,0],'Средний Ø мелющих тел',ylabel='мм')
+        for ci,color in [(1,'#d5a6ee'),(2,'#82bfe9')]:
+            key=f'Б1К{ci} Dср, мм'
+            if key in run['rows'][0]:
+                a[1,0].plot(x,[r[key] for r in run['rows']],color=color,lw=2,label=f'Камера {ci}')
+        a[1,0].legend(facecolor=PANEL,labelcolor=LIGHT,framealpha=.75,fontsize=7)
+        self._style_axes(a[1,1],'Производительность Q(t)',ylabel='т/ч')
+        a[1,1].step(x,[r['Производительность, т/ч'] for r in run['rows']],where='post',color='#f1c27c',lw=2)
+        self._style_axes(a[1,2],'Общий выпуск цемента, т',ylabel='т')
+        a[1,2].plot(x,[r['production_t'] for r in run['rows']],color='#89c992',lw=2)
+        self.fig_overview.subplots_adjust(hspace=.60,wspace=.43,left=.08,right=.98,bottom=.14,top=.92)
         self.canvas_overview.draw_idle()
         self.fig_quality.clear()
         qax=self.fig_quality.add_subplot(111)

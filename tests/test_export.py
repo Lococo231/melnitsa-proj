@@ -15,10 +15,11 @@ def test_excel_export_has_data_and_charts():
         files = archive.namelist()
         charts = [name for name in files if name.startswith("xl/charts/chart") and name.endswith(".xml")]
         sheets = [name for name in files if name.startswith("xl/worksheets/sheet") and name.endswith(".xml")]
-        assert len(charts) == 9
+        assert len(charts) == 10
         assert len(sheets) == 11
         assert b"F80" in archive.read("xl/sharedStrings.xml")
         assert b"P80" in archive.read("xl/sharedStrings.xml")
+        assert any("Производительность во времени".encode() in archive.read(name) for name in charts)
 
 def test_excel_includes_lab_bond_index_without_confusing_operating_wi():
     import json

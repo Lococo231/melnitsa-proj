@@ -1,0 +1,187 @@
+{
+  "mills": [
+    {
+      "name": "Мельница №3",
+      "diameter_m": 4,
+      "length_m": 13.4,
+      "rpm": 16,
+      "power_kw": 2400,
+      "diaphragm_m": 0.5,
+      "chambers": [
+        {
+          "length_m": 6.265,
+          "diameter_m": 4
+        },
+        {
+          "length_m": 6.635,
+          "diameter_m": 4
+        }
+      ]
+    }
+  ],
+  "media": [
+    {
+      "drum": 1,
+      "chamber": 1,
+      "type": "Шары",
+      "material": "Сталь",
+      "diameter_mm": 90,
+      "initial_t": 3,
+      "aspect": 1
+    },
+    {
+      "drum": 1,
+      "chamber": 1,
+      "type": "Шары",
+      "material": "Сталь",
+      "diameter_mm": 80,
+      "initial_t": 20.82,
+      "aspect": 1
+    },
+    {
+      "drum": 1,
+      "chamber": 1,
+      "type": "Шары",
+      "material": "Сталь",
+      "diameter_mm": 70,
+      "initial_t": 23,
+      "aspect": 1
+    },
+    {
+      "drum": 1,
+      "chamber": 1,
+      "type": "Шары",
+      "material": "Сталь",
+      "diameter_mm": 60,
+      "initial_t": 25.175,
+      "aspect": 1
+    },
+    {
+      "drum": 1,
+      "chamber": 1,
+      "type": "Шары",
+      "material": "Сталь",
+      "diameter_mm": 50,
+      "initial_t": 18,
+      "aspect": 1
+    },
+    {
+      "drum": 1,
+      "chamber": 2,
+      "type": "Цильпебс",
+      "material": "Сталь",
+      "diameter_mm": 50,
+      "initial_t": 4,
+      "aspect": 1
+    },
+    {
+      "drum": 1,
+      "chamber": 2,
+      "type": "Цильпебс",
+      "material": "Сталь",
+      "diameter_mm": 40,
+      "initial_t": 18,
+      "aspect": 1
+    },
+    {
+      "drum": 1,
+      "chamber": 2,
+      "type": "Цильпебс",
+      "material": "Сталь",
+      "diameter_mm": 30,
+      "initial_t": 30,
+      "aspect": 1
+    },
+    {
+      "drum": 1,
+      "chamber": 2,
+      "type": "Цильпебс",
+      "material": "Сталь",
+      "diameter_mm": 25,
+      "initial_t": 30,
+      "aspect": 1
+    },
+    {
+      "drum": 1,
+      "chamber": 2,
+      "type": "Цильпебс",
+      "material": "Сталь",
+      "diameter_mm": 20,
+      "initial_t": 14,
+      "aspect": 1
+    },
+    {
+      "drum": 1,
+      "chamber": 2,
+      "type": "Цильпебс",
+      "material": "Сталь",
+      "diameter_mm": 17,
+      "initial_t": 9,
+      "aspect": 1
+    }
+  ],
+  "throughput_mode": "Измеренная подача, т/ч",
+  "fresh_feed_tph": 72,
+  "measured_total_t": 720,
+  "measured_hours": 10,
+  "specific_energy_kwh_t": 32,
+  "recycle_ratio": 0,
+  "material_hold_t": 18,
+  "feed_bulk_density": 1200,
+  "abrasion_factor": 1,
+  "moisture_pct": 0.8,
+  "temperature_c": 95,
+  "work_index_kwh_t": null,
+  "grindability": 1,
+  "feed_fraction": [
+    0,
+    8.37,
+    21.99,
+    29.08,
+    18.32,
+    14.15,
+    5.48,
+    1.7,
+    0.5,
+    0.45
+  ],
+  "wear_g_t": 90,
+  "delta": 0,
+  "wear_ref_rpm_fraction": 0.76,
+  "power_exponent": 0.45,
+  "speed_exponent": 0.7,
+  "loading_exponent": 0.35,
+  "feed_coarseness_exponent": 0.2,
+  "hardness_exponent": 0.25,
+  "retention_mm": 7,
+  "wear_reference_fill": 0.3,
+  "breakage_k": 2.8,
+  "fines_attrition_k": 0.12,
+  "lab_blaine_base": 1500,
+  "lab_blaine_scale": 30,
+  "horizon_h": 1000,
+  "step_h": 10,
+  "reload_threshold_pct": 3,
+  "manual_reloads": [],
+  "sieves_mm": [
+    40,
+    20,
+    10,
+    5,
+    2.5,
+    1.25,
+    0.63,
+    0.08,
+    0.045
+  ],
+  "throughput_schedule": [
+    {
+      "hour": 250,
+      "tph": 65
+    },
+    {
+      "hour": 600,
+      "tph": 80
+    }
+  ]
+}

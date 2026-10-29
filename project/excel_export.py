@@ -12,7 +12,7 @@ from typing import Any
 import xlsxwriter
 from xlsxwriter.utility import xl_col_to_name
 
-from model import initial_cohorts, quality_at, quality_over_time, recommends, lab_bond_from_config
+from model import initial_cohorts, quality_at, quality_over_time, recommends, lab_bond_from_config, config_at_time
 
 
 def clean(value: Any) -> Any:
@@ -97,7 +97,7 @@ def export_excel(cfg: dict, run: dict) -> bytes:
     report = Report(wb)
     try:
         q0 = quality_at(cfg, initial_cohorts(cfg))
-        q1 = quality_at(cfg, run["cohorts"])
+        q1 = quality_at(config_at_time(cfg,cfg["horizon_h"]), run["cohorts"])
         recommended = recommends(cfg, run)
         lab_wi,lab_wi_origin = lab_bond_from_config(cfg)
 
@@ -112,7 +112,9 @@ def export_excel(cfg: dict, run: dict) -> bytes:
         summary.set_column("C:C", 69)
         summary.freeze_panes(3, 0)
         inputs = [
-            ("Производительность продукта, т/ч", run["throughput"]["product_tph"], "Измеренная / расчётная"),
+            ("Производительность в начале, т/ч", run["throughput"]["product_tph"], "Измеренная / заданная"),
+            ("Средняя производительность, т/ч", run["throughput"]["average_product_tph"], "Выпуск за период / часы"),
+            ("Произведено за период, т", run["throughput"]["total_production_t"], "Сумма Q(t) × Δt"),
             ("Внутренний поток через мельницу, т/ч", run["throughput"]["mill_feed_tph"], "При возврате сепаратора"),
             ("Мощность, кВт", sum(m["power_kw"] for m in cfg["mills"]), "Из исходных параметров приводов"),
             ("Удельная энергия, кВт·ч/т", run["throughput"]["operating_specific_energy"], "Мощность / продукт"),
@@ -142,7 +144,7 @@ def export_excel(cfg: dict, run: dict) -> bytes:
         summary.write_string(base, 0, "Расчётный удельный расход по периоду, г/т")
         # 0-based: B4 -> выпуск Q, B8 -> наработка, B13 -> масса износа, т
         # Прямой расчёт вместо ссылки на фиксированные строки (список сводки изменяется).
-        production=run["throughput"]["product_tph"]*cfg["horizon_h"]
+        production=run["throughput"]["total_production_t"]
         actual_g_t=run["total_wear_t"]*1_000_000/production if production>0 else 0
         summary.write_number(base,1,actual_g_t,report.emphasis)
         summary.merge_range(base + 2, 0, base + 2, 5,
@@ -152,19 +154,27 @@ def export_excel(cfg: dict, run: dict) -> bytes:
         hist = run["rows"]
         wsh, wcols, wend = report.sheet("Износ_во_времени", hist,
             {"hours": 17, "production_t": 19, "loss_t": 16, "total_media_t": 20})
-        report.line(wsh, "Кумулятивная потеря массы, т", 0, [(2, "Износ, т")], wend,
+        loss_col=wcols.index("loss_t")
+        mass_col=wcols.index("total_media_t")
+        q_col=wcols.index("Производительность, т/ч")
+        prod_col=wcols.index("production_t")
+        report.line(wsh, "Кумулятивная потеря массы, т", 0, [(loss_col, "Износ, т")], wend,
                     "P2", y_label="т")
-        report.line(wsh, "Масса мелющих тел, т", 0, [(3, "Остаток, т")], wend,
+        report.line(wsh, "Масса мелющих тел, т", 0, [(mass_col, "Остаток, т")], wend,
                     "P21", y_label="т")
-        rate_idx = len(wcols)
-        wsh.write(0, rate_idx, "Удельный расход интервала, г/т", report.header)
-        wsh.set_column(rate_idx, rate_idx, 31, report.numeric)
-        for excel_row in range(3, wend + 1):
-            wsh.write_formula(excel_row-1, rate_idx,
-                f"=IFERROR((C{excel_row}-C{excel_row-1})*1000000/(B{excel_row}-B{excel_row-1}),0)",
-                report.numeric)
-        report.line(wsh, "Удельный расход по шагам, г/т", 0,
-                    [(rate_idx, "г/т")], wend, "P40", y_label="г/т")
+        report.line(wsh, "Производительность во времени, т/ч", 0, [(q_col, "Подача Q")], wend,
+                    "P59", y_label="т/ч")
+        rate_idx=len(wcols)
+        wsh.write(0,rate_idx,"Удельный расход интервала, г/т",report.header)
+        wsh.set_column(rate_idx,rate_idx,31,report.numeric)
+        loss_letter=xl_col_to_name(loss_col)
+        prod_letter=xl_col_to_name(prod_col)
+        for excel_row in range(3,wend+1):
+            wsh.write_formula(excel_row-1,rate_idx,
+                f"=IFERROR(({loss_letter}{excel_row}-{loss_letter}{excel_row-1})*1000000/"
+                f"({prod_letter}{excel_row}-{prod_letter}{excel_row-1}),0)",report.numeric)
+        report.line(wsh,"Удельный расход по шагам, г/т",0,[(rate_idx,"г/т")],wend,
+                    "P78",y_label="г/т")
 
         diam = run.get("diameter_history", [])
         if diam:

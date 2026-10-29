@@ -110,6 +110,20 @@ def validate(cfg: dict) -> None:
             raise ValueError('Лабораторный индекс Бонда должен быть положительным')
     lab_bond_from_config(cfg)
     _ = throughput(cfg)
+    schedule=cfg.get('throughput_schedule',[])
+    if not isinstance(schedule,list) or len(schedule)>100:
+        raise ValueError('График подачи: максимум 100 строк')
+    times=set()
+    for row in schedule:
+        if not isinstance(row,dict):raise ValueError('График подачи: неверная строка')
+        t,q=row.get('hour'),row.get('tph')
+        if (isinstance(t,bool) or not isinstance(t,(int,float)) or not math.isfinite(t)
+                or t<0 or t>cfg['horizon_h']):
+            raise ValueError('Час изменения подачи должен попадать в период прогноза')
+        if t in times:raise ValueError('Часы изменений подачи не должны повторяться')
+        times.add(t)
+        if isinstance(q,bool) or not isinstance(q,(int,float)) or not math.isfinite(q) or not 0<q<=20000:
+            raise ValueError('Подача на временном участке должна быть >0 и ≤20000 т/ч')
 
 
 def throughput(cfg:dict) -> dict:
@@ -125,6 +139,23 @@ def throughput(cfg:dict) -> dict:
     if not math.isfinite(q) or q <= 0 or q > 20000: raise ValueError("Производительность должна быть >0 и <20000 т/ч")
     return {"product_tph":q,"mill_feed_tph":q*(1+cfg["recycle_ratio"]),
             "operating_specific_energy":sum(m["power_kw"] for m in cfg["mills"])/q}
+
+
+def throughput_at(cfg:dict, hour:float) -> float:
+    """Заданная подача в данный момент; без выдуманной связи с износом."""
+    q=throughput(cfg)['product_tph']
+    for row in sorted(cfg.get('throughput_schedule',[]),key=lambda r:r['hour']):
+        if row['hour']>hour+1e-9:break
+        q=float(row['tph'])
+    return q
+
+
+def config_at_time(cfg:dict, hour:float) -> dict:
+    """Для качества продукта используем Q соответствующего периода."""
+    out=deepcopy(cfg)
+    out['throughput_mode']='Измеренная подача, т/ч'
+    out['fresh_feed_tph']=throughput_at(cfg,hour)
+    return out
 
 
 def volume_m3(mill: dict, chamber: int) -> float:
@@ -241,9 +272,10 @@ def coefficient_at(cfg:dict, cohorts:list[dict], W_ref:float, hours:float)->dict
     return out
 
 
-def snapshot(cohorts:list[dict], cfg:dict, t:float, cumulative_prod:float, cumulative_wear:float) -> dict:
+def snapshot(cohorts:list[dict], cfg:dict, t:float, cumulative_prod:float, cumulative_wear:float, q:float) -> dict:
     cinfo=chamber_info(cfg,cohorts)
     d={"hours":float(t),"production_t":float(cumulative_prod),
+       "Производительность, т/ч":float(q),
        "loss_t":float(cumulative_wear/1000),"total_media_t":sum(cohort_mass(c) for c in cohorts)/1000}
     for info in cinfo:
         key=f"Б{info['drum']}К{info['chamber']}"
@@ -255,7 +287,7 @@ def snapshot(cohorts:list[dict], cfg:dict, t:float, cumulative_prod:float, cumul
 
 def simulate_wear(cfg:dict) -> dict:
     validate(cfg)
-    Q=throughput(cfg)["product_tph"]
+    base_q=throughput(cfg)["product_tph"]
     cohorts=initial_cohorts(cfg)
     if not cohorts:raise ValueError("Нужно добавить хотя бы одну фракцию мелющих тел")
     baseline=chamber_info(cfg,cohorts)
@@ -264,7 +296,7 @@ def simulate_wear(cfg:dict) -> dict:
     w_ref=sum(ref_weights)
     if w_ref<=0: raise ValueError("Нет мелющих тел выше диаметра выбраковки")
     initial_mass=sum(cohort_mass(c) for c in cohorts)
-    hist=[snapshot(cohorts,cfg,0,0,0)]
+    hist=[snapshot(cohorts,cfg,0,0,0,throughput_at(cfg,0))]
     d0,m0=fractions_at(cohorts,0)
     diam_history=[d0]
     fraction_mass_history=[m0]
@@ -275,9 +307,15 @@ def simulate_wear(cfg:dict) -> dict:
     loss_sum=0.0
     horizon=float(cfg["horizon_h"])
     steps=max(1,math.ceil(horizon/max(cfg["step_h"],horizon/400 if horizon else .01)))
-    dt=horizon/steps if steps else 0
-    for step in range(steps):
-        t0=step*dt; t1=(step+1)*dt
+    grid={0.,horizon}
+    grid.update(horizon*k/steps for k in range(1,steps))
+    grid.update(float(r['hour']) for r in scheduled if 0<r['hour']<horizon)
+    grid.update(float(r['hour']) for r in cfg.get('throughput_schedule',[]) if 0<r['hour']<horizon)
+    times=sorted(grid)
+    production_sum=0.
+    for t0,t1 in zip(times,times[1:]):
+        dt=t1-t0
+        Q=throughput_at(cfg,t0)
         # Добавленные тела — новая партия с НАЧАЛЬНЫМ диаметром
         while scheduled_index<len(scheduled) and scheduled[scheduled_index].get("hour",0)<=t0+1e-9:
             rr=scheduled[scheduled_index];scheduled_index+=1
@@ -303,7 +341,8 @@ def simulate_wear(cfg:dict) -> dict:
                 rem=cohort_mass(c)
                 c["removed_kg"]=c.get("removed_kg",0)+rem
                 c["n"]=0.0
-        hist.append(snapshot(cohorts,cfg,t1,Q*t1,loss_sum))
+        production_sum+=Q*dt
+        hist.append(snapshot(cohorts,cfg,t1,production_sum,loss_sum,throughput_at(cfg,t1)))
         dh,mh=fractions_at(cohorts,t1)
         diam_history.append(dh)
         fraction_mass_history.append(mh)
@@ -325,7 +364,8 @@ def simulate_wear(cfg:dict) -> dict:
             "initial_media_t":initial_mass/1000,"total_wear_t":loss_sum/1000,"reload_events":events,
             "diameter_history":diam_history,"fraction_mass_history":fraction_mass_history,
             "coefficient_history":coefficient_history,
-            "throughput":throughput(cfg)}
+            "throughput":{**throughput(cfg),"average_product_tph":(production_sum/horizon if horizon>0 else base_q),
+                          "total_production_t":production_sum}}
 
 
 def recommends(cfg:dict, run:dict) -> list[dict]:
@@ -501,7 +541,7 @@ def quality_over_time(cfg:dict, run:dict, max_points:int=16)->list[dict]:
     data.append({"Наработка, ч":0.,"R0.08, %":q["r008"],"R0.045, %":q["r0045"],
                  "Блейн-прокси, см²/г":q["blaine_proxy"]})
     h=run["rows"][-1]["hours"]
-    q=quality_at(cfg,run["cohorts"])
+    q=quality_at(config_at_time(cfg,h),run["cohorts"])
     data.append({"Наработка, ч":h,"R0.08, %":q["r008"],"R0.045, %":q["r0045"],
                  "Блейн-прокси, см²/г":q["blaine_proxy"]})
     return data
