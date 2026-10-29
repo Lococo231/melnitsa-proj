@@ -32,3 +32,16 @@ def test_imported_clinker_csv_example():
     with (ROOT/'examples/clinker_fractions.csv').open() as f: rows=list(csv.DictReader(f))
     assert len(rows)==10
     assert 99 <= sum(float(r['percent']) for r in rows) <= 101
+
+def test_bond_test_is_import_not_live_operator_control():
+    from model import lab_bond_from_config, default_config
+    params=[key for section in FIELDS.values() for key,*_ in section]
+    assert 'work_index_kwh_t' not in params
+    assert 'bond_test' not in params
+    example=json.loads((ROOT/'examples/lab_bond_test.json').read_text(encoding='utf-8'))
+    cfg=default_config()
+    cfg.update(example)
+    assert is_valid_input(cfg)
+    wi,origin=lab_bond_from_config(cfg)
+    assert 5<wi<30
+    assert 'протоколу' in origin

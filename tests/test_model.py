@@ -66,3 +66,25 @@ def test_wear_from_plant_csv():
     lines=parse_history_csv(DEMO_CSV.encode())
     assert len(lines)==3
     assert 0<summarize_history(lines)['gmcr_g_t']<1000
+
+
+def test_bond_lab_index_from_independent_lab_report():
+    from model import laboratory_bond_index, lab_bond_from_config, default_config
+    test={'closing_sieve_um':106.0,'gpr_g_rev':1.8,'f80_um':2700.0,'p80_um':85.0}
+    actual=laboratory_bond_index(test)
+    assert actual == pytest.approx(11.616015469189795,rel=1e-8)
+    cfg=default_config()
+    assert lab_bond_from_config(cfg)[0] is None
+    cfg['bond_test']=test
+    assert lab_bond_from_config(cfg)[0] == pytest.approx(actual)
+    from model import validate
+    validate(cfg)
+
+
+def test_bond_lab_index_invalid_test_rejected():
+    from model import laboratory_bond_index, default_config, validate
+    test={'closing_sieve_um':106.,'gpr_g_rev':0.,'f80_um':2700.,'p80_um':85.}
+    with pytest.raises(ValueError):laboratory_bond_index(test)
+    cfg=default_config()
+    cfg['bond_test']=test
+    with pytest.raises(ValueError):validate(cfg)

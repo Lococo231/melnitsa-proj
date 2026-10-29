@@ -1,4 +1,4 @@
-"""Расчётное ядро Black Box: помол и износ мелющих тел.
+"""Расчётное ядро: помол и износ мелющих тел.
 
 Инженерный прототип: параметры по умолчанию иллюстративные, а не заводская калибровка.
 Обозначения и единицы подробно описаны в README.md.
@@ -47,7 +47,7 @@ def default_config() -> dict:
         specific_energy_kwh_t=32.0, recycle_ratio=0.0,
         material_hold_t=18.0, feed_bulk_density=DEFAULT_DENSITY,
         abrasion_factor=1.0, moisture_pct=0.8, temperature_c=95.,
-        work_index_kwh_t=None,
+        work_index_kwh_t=None, bond_test=None,
         grindability=1.0, feed_fraction=list(FEED_PRESET), sieves_mm=[40.,20.,10.,5.,2.5,1.25,.63,.08,.045],
         wear_g_t=90.0, delta=0.0, wear_ref_rpm_fraction=0.76,
         power_exponent=0.45, speed_exponent=0.7, loading_exponent=0.35, feed_coarseness_exponent=0.2, hardness_exponent=0.25,
@@ -104,6 +104,11 @@ def validate(cfg: dict) -> None:
         raise ValueError("Некорректные коэффициенты износа")
     if cfg["retention_mm"] < 0:
         raise ValueError("Диаметр выбраковки должен быть ≥ 0")
+    if cfg.get('work_index_kwh_t') is not None:
+        wi=cfg['work_index_kwh_t']
+        if isinstance(wi,bool) or not isinstance(wi,(int,float)) or not math.isfinite(wi) or wi<=0:
+            raise ValueError('Лабораторный индекс Бонда должен быть положительным')
+    lab_bond_from_config(cfg)
     _ = throughput(cfg)
 
 
@@ -390,6 +395,41 @@ def size_at_pass_percent(comp:list[float], passing_pct:float=80.0) -> float:
         if ret>threshold:lo=mid
         else:hi=mid
     return math.sqrt(lo*hi)*1000.0
+
+
+def laboratory_bond_index(test:dict) -> float:
+    """Wi лаборатории (кВт·ч/метрическую тонну) по стандартному тесту Бонда.
+
+    P1 -- замыкающее сито, мкм; Gpr -- вновь образованный проход, г/оборот;
+    F80/P80 -- характеристики *лабораторной* пробы, не мельничной диаграммы.
+    Исходная формула 44.5 даёт кВт·ч на короткую тонну (2000 lb):
+    перевод в кВт·ч/метрическую тонну = × 1.10231131.
+    """
+    if not isinstance(test,dict):
+        raise ValueError('Результат лабораторного теста Бонда должен быть объектом JSON')
+    keys=('closing_sieve_um','gpr_g_rev','f80_um','p80_um')
+    try:
+        p1,gpr,f80,p80=(float(test[k]) for k in keys)
+    except (KeyError,TypeError,ValueError) as exc:
+        raise ValueError('Для теста Бонда нужны closing_sieve_um, gpr_g_rev, f80_um, p80_um') from exc
+    if not all(math.isfinite(x) and x>0 for x in (p1,gpr,f80,p80)) or p80>=f80:
+        raise ValueError('Неверные лабораторные данные Бонда: значения > 0, F80 > P80')
+    term=10/math.sqrt(p80)-10/math.sqrt(f80)
+    return 44.5 / (p1**0.23 * gpr**0.82 * term) * 1.10231131
+
+
+def lab_bond_from_config(cfg:dict) -> tuple[float|None,str]:
+    """Измеренный до помола Wi, либо расчёт по импортированному протоколу.
+
+    Не использовать операционный Wi или грансостав мельницы для подмены теста.
+    """
+    test=cfg.get('bond_test')
+    if test is not None:
+        return laboratory_bond_index(test),'рассчитан по протоколу испытания'
+    value=cfg.get('work_index_kwh_t')
+    if value is not None:
+        return float(value),'импортирован лабораторный результат'
+    return None,'лабораторный протокол не загружен'
 
 
 def operating_bond_index(power_kw:float,product_tph:float,f80_um:float,p80_um:float) -> float|None:

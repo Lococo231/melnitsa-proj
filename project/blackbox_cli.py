@@ -1,4 +1,4 @@
-"""JSON -> Black Box -> JSON для внешнего приложения/АСУ ТП.
+"""JSON -> расчёт цементной мельницы -> JSON для внешнего приложения/АСУ ТП.
 
 Пример: python blackbox_cli.py example_config.json out.json
 """
@@ -28,7 +28,7 @@ def process(payload:dict)->dict:
 
 
 def main():
-    ap=argparse.ArgumentParser(description="Расчётный Black Box помола и износа")
+    ap=argparse.ArgumentParser(description="Расчёт помола и износа цементной мельницы")
     ap.add_argument("input_json",type=Path)
     ap.add_argument("output_json",type=Path)
     args=ap.parse_args()

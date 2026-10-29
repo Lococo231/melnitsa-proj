@@ -1,0 +1,11 @@
+{
+  "bond_test": {
+    "closing_sieve_um": 106.0,
+    "gpr_g_rev": 1.8,
+    "f80_um": 2700.0,
+    "p80_um": 85.0
+  },
+  "grindability": 1.0,
+  "abrasion_factor": 1.0,
+  "feed_bulk_density": 1200.0
+}

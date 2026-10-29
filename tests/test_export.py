@@ -19,3 +19,17 @@ def test_excel_export_has_data_and_charts():
         assert len(sheets) == 11
         assert b"F80" in archive.read("xl/sharedStrings.xml")
         assert b"P80" in archive.read("xl/sharedStrings.xml")
+
+def test_excel_includes_lab_bond_index_without_confusing_operating_wi():
+    import json
+    from pathlib import Path
+    from model import default_config, simulate_wear
+    cfg=default_config()
+    cfg.update(json.loads((Path(__file__).resolve().parents[1] / 'examples' / 'lab_bond_test.json').read_text(encoding='utf-8')))
+    report=export_excel(cfg,simulate_wear(cfg))
+    import io,zipfile
+    with zipfile.ZipFile(io.BytesIO(report)) as archive:
+        strings=archive.read('xl/sharedStrings.xml').decode('utf-8')
+        assert 'Wi лабораторный (Бонд)' in strings
+        assert 'Wi эксплуатационный' in strings
+        assert 'ЦЕМЕНТНАЯ МЕЛЬНИЦА' in strings

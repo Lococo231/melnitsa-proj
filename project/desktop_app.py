@@ -18,7 +18,7 @@ from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from matplotlib.figure import Figure
 
 from model import (CLASSES, MATERIALS, SIEVES, default_config, validate, throughput,
-                   simulate_wear, quality_at, initial_cohorts, recommends)
+                   simulate_wear, quality_at, initial_cohorts, recommends, size_at_pass_percent, lab_bond_from_config)
 from excel_export import export_excel
 from calibration import parse_history_csv, summarize_history
 
@@ -142,9 +142,9 @@ class RecordDialog(tk.Toplevel):
 class DesktopApp(tk.Tk):
     def __init__(self):
         super().__init__()
-        self.title('Моделирование цементной мельницы — износ и диаграмма помола')
-        self.geometry('1500x900')
-        self.minsize(1100,720)
+        self.title('Цементная мельница')
+        self.geometry('1350x850')
+        self.minsize(780,590)
         self.configure(bg=DARK)
         self._setup_style()
         self.config_data=default_config()
@@ -153,6 +153,8 @@ class DesktopApp(tk.Tk):
         self.history_rows=[]
         self.fields_vars={}
         self.feed_vars=[]
+        self.lab_vars={}
+        self.calibration_label=None
         self.sieve_vars={}
         self.mill_forms=[]
         self.metric_vars=[tk.StringVar(value='—') for _ in range(5)]
@@ -174,6 +176,10 @@ class DesktopApp(tk.Tk):
         s.configure('TCombobox',fieldbackground='#20364a',foreground=LIGHT,background='#20364a',padding=5)
         s.map('TCombobox',fieldbackground=[('readonly','#20364a')],foreground=[('readonly',LIGHT)])
         s.configure('TNotebook',background=DARK,borderwidth=0)
+        # Компактная версия показывает полный заголовок раздела в списке выбора.
+        # В Tk/ttk длинные заголовки вкладок НЕ переносятся автоматически.
+        s.configure('Tabless.TNotebook',background=DARK,borderwidth=0)
+        s.layout('Tabless.TNotebook.Tab', [])
         s.configure('TNotebook.Tab',background='#20364a',foreground=LIGHT,padding=(12,10))
         s.map('TNotebook.Tab',background=[('selected',PANEL)],foreground=[('selected',ACCENT)])
         s.configure('Treeview',background='#172d41',fieldbackground='#172d41',foreground=LIGHT,rowheight=26,borderwidth=0)
@@ -183,41 +189,60 @@ class DesktopApp(tk.Tk):
         s.configure('TLabelframe.Label',background=PANEL,foreground=ACCENT,font=(FONT,10,'bold'))
 
     def _make_layout(self):
-        header=tk.Frame(self,bg=DARK,padx=18,pady=12)
+        # В верхней панели только частые действия; импорт и остальные команды в меню.
+        menu=tk.Menu(self)
+        files=tk.Menu(menu,tearoff=False)
+        for label,cmd in [('Импорт конфигурации JSON…',self.open_json),
+                          ('Импорт грансостава CSV…',self.open_psd),
+                          ('Импорт лабораторного теста JSON…',self.open_lab_test),
+                          ('Импорт истории работы CSV…',self.open_history),
+                          ('Сохранить конфигурацию JSON…',self.save_json),
+                          ('Экспорт Excel…',self.save_excel)]:
+            files.add_command(label=label,command=cmd)
+        files.add_separator()
+        files.add_command(label='Выход',command=self.destroy)
+        menu.add_cascade(label='Файл',menu=files)
+        actions=tk.Menu(menu,tearoff=False)
+        actions.add_command(label='Рассчитать',command=self.calculate)
+        actions.add_command(label='Сбросить параметры',command=self.reset)
+        menu.add_cascade(label='Модель',menu=actions)
+        self.configure(menu=menu)
+        header=tk.Frame(self,bg=DARK,padx=16,pady=10)
         header.pack(fill='x')
-        tk.Label(header,text='BLACK BOX  /  ЦЕМЕНТНАЯ МЕЛЬНИЦА',bg=DARK,fg=LIGHT,
-                 font=(FONT,17,'bold')).pack(side='left',padx=(0,20))
-        for title,callback,accent in [
-            ('Импорт JSON',self.open_json,False),('Импорт грансостава CSV',self.open_psd,False),('Сохранить JSON',self.save_json,False),
-            ('Импорт истории CSV',self.open_history,False),('Сброс',self.reset,False),
-            ('Рассчитать',self.calculate,True),('Экспорт Excel',self.save_excel,True)]:
-            ttk.Button(header,text=title,command=callback,
-                       style='Accent.TButton' if accent else 'TButton').pack(side='left',padx=4)
+        tk.Label(header,text='Цементная мельница',bg=DARK,fg=LIGHT,
+                 font=(FONT,18,'bold')).pack(side='left',padx=(0,14))
+        ttk.Button(header,text='Экспорт Excel',command=self.save_excel).pack(side='right',padx=5)
+        ttk.Button(header,text='Рассчитать',style='Accent.TButton',command=self.calculate).pack(side='right',padx=5)
         body=ttk.Panedwindow(self,orient='horizontal')
-        body.pack(fill='both',expand=True,padx=11,pady=(0,10))
-        left=ttk.Frame(body,width=500)
+        body.pack(fill='both',expand=True,padx=9,pady=(0,8))
+        left=ttk.Frame(body,width=470)
         right=ttk.Frame(body)
         body.add(left,weight=2)
         body.add(right,weight=4)
         self.lefttabs=ttk.Notebook(left)
+        self.lefttabs_names=[]
+        self.left_picker=self._create_tab_picker(left,self.lefttabs)
         self.lefttabs.pack(fill='both',expand=True)
         self.geometry_page=ScrolledFrame(self.lefttabs)
-        self.lefttabs.add(self.geometry_page,text='Барабан и камеры')
+        self._add_page(self.lefttabs,self.lefttabs_names,self.geometry_page,'Барабан и камеры')
         self._make_geometry()
         for name in ('Подача и сырьё','Прогноз износа'):
             scroll=ScrolledFrame(self.lefttabs)
-            self.lefttabs.add(scroll,text={'Подача и сырьё':'Подача и клинкер', 'Прогноз износа':'Прогноз'}[name])
+            self._add_page(self.lefttabs,self.lefttabs_names,scroll,
+                           {'Подача и сырьё':'Подача и клинкер', 'Прогноз износа':'Прогноз износа'}[name])
             self._make_fields(scroll.inner,name)
         self.sieves_page=ScrolledFrame(self.lefttabs)
-        self.lefttabs.add(self.sieves_page,text='Сита')
+        self._add_page(self.lefttabs,self.lefttabs_names,self.sieves_page,'Сита')
         self._make_sieves()
         self.media_page=ttk.Frame(self.lefttabs,padding=8)
-        self.lefttabs.add(self.media_page,text='Мелющие тела')
+        self._add_page(self.lefttabs,self.lefttabs_names,self.media_page,'Мелющие тела')
         self._make_records(self.media_page,'media',MEDIA_FIELDS)
         self.reload_page=ttk.Frame(self.lefttabs,padding=8)
-        self.lefttabs.add(self.reload_page,text='Догрузки')
+        self._add_page(self.lefttabs,self.lefttabs_names,self.reload_page,'Догрузки')
         self._make_records(self.reload_page,'manual_reloads',RELOAD_FIELDS)
         self.righttabs=ttk.Notebook(right)
+        self.righttabs_names=[]
+        self.right_picker=self._create_tab_picker(right,self.righttabs)
         self.righttabs.pack(fill='both',expand=True)
         self.overview_frame=ttk.Frame(self.righttabs)
         self.quality_frame=ttk.Frame(self.righttabs)
@@ -228,7 +253,9 @@ class DesktopApp(tk.Tk):
         for name,frame in [('Обзор',self.overview_frame),('Диаграмма помола',self.quality_frame),
                            ('Износ фракций',self.fraction_frame),('Рекомендации',self.reco_frame),
                            ('Таблица проб',self.sample_frame),('Заводская история',self.history_frame)]:
-            self.righttabs.add(frame,text=name)
+            self._add_page(self.righttabs,self.righttabs_names,frame,name)
+        self._init_tab_picker(self.lefttabs,self.lefttabs_names,self.left_picker,left,680)
+        self._init_tab_picker(self.righttabs,self.righttabs_names,self.right_picker,right,790)
         self._make_overview()
         self.fig_quality,self.canvas_quality=self._graph(self.quality_frame,(9.1,6.5))
         filterbar=ttk.Frame(self.fraction_frame,padding=(12,6))
@@ -246,23 +273,60 @@ class DesktopApp(tk.Tk):
         self.history_summary=ttk.Label(self.history_frame,text='История пока не загружена')
         self.history_summary.pack(anchor='w',padx=12)
         self.history_tree=self._tree(self.history_frame,['period','production_t','start_media_t','reload_t','end_media_t','removed_media_t','gmcr_g_t'])
-        status=tk.Label(self,textvariable=self.status_var,anchor='w',padx=18,pady=7,bg='#21374a',fg=MUTED,font=(FONT,9))
+        status=tk.Label(self,textvariable=self.status_var,anchor='w',padx=12,pady=6,bg='#21374a',fg=MUTED,font=(FONT,9))
         status.pack(fill='x',side='bottom')
+        status.bind('<Configure>',lambda e:status.configure(wraplength=max(250,e.width-34)))
+
+    def _add_page(self,notebook,names,frame,title):
+        notebook.add(frame,text=title)
+        names.append(title)
+
+    @staticmethod
+    def _create_tab_picker(parent,notebook):
+        picker=ttk.Combobox(parent,values=[],state='readonly',font=(FONT,11))
+        return picker
+
+    def _init_tab_picker(self,notebook,names,picker,parent,limit):
+        picker.configure(values=names)
+        picker.current(0)
+        picker.bind('<<ComboboxSelected>>',lambda _e: notebook.select(picker.current()))
+        def on_tab(_e=None):
+            index=notebook.index(notebook.select())
+            if picker.current()!=index:picker.current(index)
+        notebook.bind('<<NotebookTabChanged>>',on_tab)
+        def layout(e):
+            compact=e.width<limit
+            notebook.configure(style='Tabless.TNotebook' if compact else 'TNotebook')
+            if compact:
+                if not picker.winfo_manager():picker.pack(fill='x',padx=8,pady=(5,7),before=notebook)
+            elif picker.winfo_manager():
+                picker.pack_forget()
+        parent.bind('<Configure>',layout,add='+')
 
     def _make_overview(self):
         strip=ttk.Frame(self.overview_frame,padding=12)
         strip.pack(fill='x')
         captions=['Поток, т/ч','Износ за период, т','Масса загрузки, т','R0,08 в конце, %','Блейн-прокси, см²/г']
-        for i,(label,var) in enumerate(zip(captions,self.metric_vars)):
-            box=ttk.Frame(strip)
-            box.grid(row=0,column=i,padx=8,sticky='ew')
-            ttk.Label(box,text=label,foreground=MUTED).pack(anchor='w')
-            ttk.Label(box,textvariable=var,font=(FONT,15,'bold'),foreground=ACCENT).pack(anchor='w')
-            strip.grid_columnconfigure(i,weight=1)
+        cards=[]
+        for label,var in zip(captions,self.metric_vars):
+            card=ttk.Frame(strip)
+            ttk.Label(card,text=label,foreground=MUTED,wraplength=175).pack(anchor='w')
+            ttk.Label(card,textvariable=var,font=(FONT,14,'bold'),foreground=ACCENT).pack(anchor='w')
+            cards.append(card)
+        self._cards_columns=None
+        def arrange_metrics(e):
+            columns=5 if e.width>=930 else 3 if e.width>=570 else 2
+            if columns==self._cards_columns:return
+            self._cards_columns=columns
+            for col in range(5):strip.columnconfigure(col,weight=1 if col<columns else 0)
+            for i,card in enumerate(cards):card.grid(row=i//columns,column=i%columns,padx=7,pady=4,sticky='w')
+        strip.bind('<Configure>',arrange_metrics)
+        # Начальный вариант до первого события Configure.
+        for i,card in enumerate(cards):card.grid(row=i//3,column=i%3,padx=7,pady=4,sticky='w')
         self.fig_overview,self.canvas_overview=self._graph(self.overview_frame,(9,6))
         self.derived_var=tk.StringVar(value='F80: —  |  P80: —  |  Wi эксплуатации: —')
         ttk.Label(self.overview_frame,textvariable=self.derived_var,foreground=ACCENT,wraplength=1050).pack(anchor='w',padx=14,pady=6)
-        ttk.Label(self.overview_frame,text='Индекс Бонда лаборатории определяется испытанием клинкера, его нельзя отрегулировать на мельнице. F80 — размер 80%-го прохода на входе; P80 — на выходе.' ,foreground=MUTED,wraplength=1050).pack(anchor='w',padx=14,pady=6)
+        ttk.Label(self.overview_frame,text='Wi эксплуатации — оценка по мощности, потоку и F80/P80; лабораторный Wi отображается на вкладке «Подача и клинкер».',foreground=MUTED,wraplength=850).pack(anchor='w',padx=14,pady=6)
         ttk.Label(self.overview_frame,text='Модель исследовательская: коэффициенты и Блейн-прокси требуют проверки по измерениям предприятия.',foreground=MUTED).pack(anchor='w',padx=14,pady=6)
 
     def _graph(self,parent,figsize):
@@ -451,7 +515,72 @@ class DesktopApp(tk.Tk):
                 v=tk.StringVar()
                 self.feed_vars.append(v)
                 ttk.Entry(box,textvariable=v,width=19,state='readonly').grid(row=102+i,column=1,sticky='ew',pady=4)
+        if name=='Подача и сырьё':
+            ttk.Separator(box,orient='horizontal').grid(row=125,columnspan=2,sticky='ew',pady=12)
+            ttk.Label(box,text='Лабораторные свойства клинкера',foreground=ACCENT,
+                      font=(FONT,11,'bold')).grid(row=126,columnspan=2,sticky='w',pady=6)
+            for j,(key,label) in enumerate([
+                ('lab_wi','Индекс Бонда лабораторный, кВт·ч/т'),
+                ('lab_origin','Как определён Wi'),
+                ('f80','F80 подачи, мкм (расчёт)'),
+                ('grind','Размолоспособность (протокол)'),
+                ('abrasion','Абразивность (протокол)'),
+                ('density','Насыпная плотность, кг/м³')]):
+                ttk.Label(box,text=label,wraplength=260).grid(row=127+j,column=0,sticky='w',pady=5)
+                var=tk.StringVar(value='нет данных')
+                self.lab_vars[key]=var
+                ttk.Label(box,textvariable=var,foreground=ACCENT,wraplength=180).grid(row=127+j,column=1,sticky='w',pady=5)
+            ttk.Label(box,text='Wi рассчитывается до эксплуатации только по импортированному лабораторному протоколу Бонда (P1, Gpr, F80, P80), а не по размерам барабана.',
+                      wraplength=450,foreground=MUTED).grid(row=134,column=0,columnspan=2,sticky='w',pady=6)
+            ttk.Button(box,text='Импорт лаборатории JSON…',command=self.open_lab_test).grid(row=135,column=0,columnspan=2,sticky='ew',pady=8)
+        else:
+            ttk.Separator(box,orient='horizontal').grid(row=30,columnspan=2,sticky='ew',pady=12)
+            ttk.Label(box,text='Калибровка износа (из импортированных данных)',foreground=ACCENT,
+                      font=(FONT,11,'bold')).grid(row=31,column=0,columnspan=2,sticky='w',pady=6)
+            self.calibration_label=tk.StringVar(value='нет данных')
+            ttk.Label(box,textvariable=self.calibration_label,foreground=MUTED,
+                      wraplength=430,justify='left').grid(row=32,column=0,columnspan=2,sticky='w',pady=5)
+            ttk.Label(box,text='Коэффициенты модели не являются рычагами управления мельницей: их оценивают по замерам и истории. Импорт: Файл → Импорт истории работы CSV.',
+                      wraplength=430,foreground=MUTED).grid(row=33,column=0,columnspan=2,sticky='w',pady=5)
         box.columnconfigure(1,weight=1)
+
+    def _update_lab_labels(self,cfg):
+        wi,origin=lab_bond_from_config(cfg)
+        vals={
+            'lab_wi': 'нет протокола' if wi is None else f'{wi:.2f}',
+            'lab_origin': origin,
+            'f80': f'{size_at_pass_percent(cfg["feed_fraction"]):.0f}',
+            'grind':f'{cfg["grindability"]:.3g} (из входных данных)',
+            'abrasion':f'{cfg["abrasion_factor"]:.3g} (из входных данных)',
+            'density':f'{cfg["feed_bulk_density"]:,.0f}'.replace(',',' '),
+        }
+        for key,value in vals.items():self.lab_vars[key].set(value)
+        if self.calibration_label is not None:
+            label=('калиброван по истории' if cfg.get('wear_calibrated',False)
+                   else 'демонстрационная оценка — не заводское измерение')
+            self.calibration_label.set(f"Базовый удельный износ: {cfg['wear_g_t']:.2f} г/т ({label})\n"
+                                       f"Показатель закона размера Δ: {cfg['delta']:.2f}\n"
+                                       f"Диаметр выбраковки: {cfg['retention_mm']:.1f} мм")
+
+    def open_lab_test(self):
+        path=filedialog.askopenfilename(parent=self,title='Импорт лабораторного протокола Бонда',
+                                        initialdir=str(ROOT/'examples'),filetypes=[('JSON','*.json')])
+        if not path:return
+        try:
+            incoming=json.loads(Path(path).read_text(encoding='utf-8-sig'))
+            if not isinstance(incoming,dict):raise ValueError('Ожидается JSON-объект')
+            allowed={'bond_test','work_index_kwh_t','grindability','abrasion_factor','feed_bulk_density'}
+            if not any(k in incoming for k in allowed):
+                raise ValueError('Нет лабораторных параметров в JSON')
+            cfg=self.collect_config()
+            # Протокол с исходными данными имеет приоритет над готовым Wi.
+            for k in allowed:
+                if k in incoming:cfg[k]=incoming[k]
+            if 'bond_test' in incoming:cfg['work_index_kwh_t']=None
+            is_valid_input(cfg)
+            self.load_config(cfg,calculate=True)
+            self.status_var.set('Лабораторные данные импортированы: '+Path(path).name)
+        except Exception as exc:messagebox.showerror('Лабораторный протокол',str(exc),parent=self)
 
     def _collect_mills(self):
         form=self.mill_forms[0]
@@ -487,6 +616,7 @@ class DesktopApp(tk.Tk):
         for var,value in zip(self.feed_vars,cfg['feed_fraction']):var.set(str(value))
         self._load_sieves(cfg.get('sieves_mm',SIEVES))
         self._refresh_records()
+        self._update_lab_labels(cfg)
         self.run_data=None
         self.quality=None
         if calculate:self.calculate()
@@ -564,8 +694,10 @@ class DesktopApp(tk.Tk):
             self.history_summary.config(text=f"Периодов: {summary['periods']}  •  Износ: {summary['wear_t']:.3f} т  •  Фактический расход: {summary['gmcr_g_t']:.2f} г/т")
             self.righttabs.select(self.history_frame)
             if messagebox.askyesno('Калибровка',f"Установить фактический расход {summary['gmcr_g_t']:.2f} г/т как базовый коэффициент модели?\n\nЭто оценка по массовому балансу, не полная калибровка факторов.",parent=self):
-                self.fields_vars['wear_g_t'].set(f"{summary['gmcr_g_t']:.5f}")
-                self.calculate()
+                cfg=self.collect_config()
+                cfg['wear_g_t']=summary['gmcr_g_t']
+                cfg['wear_calibrated']=True
+                self.load_config(cfg,calculate=True)
         except Exception as e:messagebox.showerror('Ошибка CSV',str(e),parent=self)
 
     def reset(self):
@@ -583,6 +715,7 @@ class DesktopApp(tk.Tk):
             self.run_data=run
             self.quality=quality
             self._render_results(cfg,run,quality,recommendation)
+            self._update_lab_labels(cfg)
             self.status_var.set(f"Расчёт завершён: {len(run['rows'])} шагов, {len(recommendation)} предложений догрузки. Износ и Блейн — расчётный прогноз.")
         except Exception as e:
             messagebox.showerror('Ошибка расчёта',str(e),parent=self)

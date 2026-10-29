@@ -1,4 +1,4 @@
-"""Экспорт прогноза Black Box в Excel с диаграммами.
+"""Экспорт прогноза цементной мельницы в Excel с диаграммами.
 
 Использует публичную библиотеку XlsxWriter (pip install XlsxWriter),
 не требует artifact_tool или доступа к сервисам OpenAI.
@@ -12,7 +12,7 @@ from typing import Any
 import xlsxwriter
 from xlsxwriter.utility import xl_col_to_name
 
-from model import initial_cohorts, quality_at, quality_over_time, recommends
+from model import initial_cohorts, quality_at, quality_over_time, recommends, lab_bond_from_config
 
 
 def clean(value: Any) -> Any:
@@ -99,10 +99,11 @@ def export_excel(cfg: dict, run: dict) -> bytes:
         q0 = quality_at(cfg, initial_cohorts(cfg))
         q1 = quality_at(cfg, run["cohorts"])
         recommended = recommends(cfg, run)
+        lab_wi,lab_wi_origin = lab_bond_from_config(cfg)
 
         summary = wb.add_worksheet("Сводка")
         summary.hide_gridlines(2)
-        summary.merge_range("A1:F1", "BLACK BOX | ЦЕМЕНТНАЯ МЕЛЬНИЦА | ОТЧЁТ", report.title)
+        summary.merge_range("A1:F1", "ЦЕМЕНТНАЯ МЕЛЬНИЦА | ОТЧЁТ", report.title)
         summary.set_row(0, 35)
         summary.write_row("A3", ["Параметр", "Значение", "Пояснение / происхождение"], report.header)
         summary.set_row(2, 30)
@@ -117,9 +118,10 @@ def export_excel(cfg: dict, run: dict) -> bytes:
             ("Удельная энергия, кВт·ч/т", run["throughput"]["operating_specific_energy"], "Мощность / продукт"),
             ("F80 подачи, мкм", q1["f80_um"], "Расчёт из импортированного грансостава клинкера"),
             ("P80 продукта, мкм", q1["p80_um"], "Расчёт из модельного состава продукта"),
-            ("Wi эксплуатационный, кВт·ч/т", q1["operating_wi_kwh_t"] or 0, "Оценка по мощности, Q, F80, P80; НЕ лабораторный Bond Wi"),
+            ("Wi лабораторный (Бонд), кВт·ч/т", lab_wi, lab_wi_origin),
+            ("Wi эксплуатационный, кВт·ч/т", q1["operating_wi_kwh_t"], "Оценка по мощности, Q, F80, P80; НЕ лабораторный Bond Wi"),
             ("Наработка, ч", cfg["horizon_h"], "Состояние на конец горизонта"),
-            ("Базовый износ, г/т", cfg["wear_g_t"], "КАЛИБРОВОЧНЫЙ параметр, не заводское измерение"),
+            ("Базовый износ, г/т", cfg["wear_g_t"], "По импортированной истории" if cfg.get("wear_calibrated") else "Демонстрационное значение, не измерение"),
             ("Показатель закона износа Δ", cfg["delta"], "0 — поверхность; 1 — модель d³"),
             ("Относительная абразивность", cfg["abrasion_factor"], "Нужна калибровка на данных предприятия"),
             ("Масса исходной загрузки, т", run["initial_media_t"], "По размерам и загрузке"),
@@ -131,7 +133,10 @@ def export_excel(cfg: dict, run: dict) -> bytes:
         ]
         for idx, (name, value, note) in enumerate(inputs, 3):
             summary.write_string(idx, 0, name)
-            summary.write_number(idx, 1, float(value), report.input)
+            if value is None:
+                summary.write_string(idx, 1, "нет данных")
+            else:
+                summary.write_number(idx, 1, float(value), report.input)
             summary.write_string(idx, 2, note)
         base = 3 + len(inputs) + 2
         summary.write_string(base, 0, "Расчётный удельный расход по периоду, г/т")
