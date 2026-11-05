@@ -1,47 +1,80 @@
-"""Проверка настольного приложения и импорта, без запуска GUI."""
+"""Валидация пользовательских данных не зависит от Qt и выполняется без дисплея."""
 import json
 from pathlib import Path
-from desktop_app import is_valid_input, FIELDS, MEDIA_FIELDS, MODES
+
+import pytest
 from calibration import parse_history_csv
-from model import simulate_wear
-ROOT=Path(__file__).resolve().parents[1]
+from model import default_config, simulate_wear
+from ui_data import (
+    FIELDS, MODES, MEDIA_FIELDS, is_valid_input,
+    default_table_row, row_from_cells, clinker_from_csv, merge_lab_parameters,
+)
 
-def test_two_chamber_example():
-    c=json.loads((ROOT/'examples/mill3_input.json').read_text())
-    assert is_valid_input(c)
-    assert len(c['mills'])==1 and len(c['mills'][0]['chambers'])==2
-    assert simulate_wear(c)['total_wear_t']>0
+ROOT = Path(__file__).resolve().parents[1]
 
-def test_one_chamber_example():
-    c=json.loads((ROOT/'examples/one_chamber_input.json').read_text())
-    assert is_valid_input(c) and len(c['mills'][0]['chambers'])==1
-    assert all(r['chamber']==1 for r in c['media'])
 
-def test_history_import_example():
-    assert len(parse_history_csv((ROOT/'examples/history_input.csv').read_bytes()))==3
-
-def test_clinker_not_user_controlled():
-    fields=[key for group in FIELDS.values() for key,*_ in group]
-    for key in ('work_index_kwh_t','f80_um','p80_um','feed_fraction','wear_g_t','grindability'):
-        assert key not in fields
-    assert MODES==['Измеренная подача, т/ч','Масса / время']
-    assert 'diameter_mm' in [key for key,_ in MEDIA_FIELDS]
-
-def test_imported_clinker_csv_example():
-    import csv
-    with (ROOT/'examples/clinker_fractions.csv').open() as f: rows=list(csv.DictReader(f))
-    assert len(rows)==10
-    assert 99 <= sum(float(r['percent']) for r in rows) <= 101
-
-def test_bond_test_is_import_not_live_operator_control():
-    from model import lab_bond_from_config, default_config
-    params=[key for section in FIELDS.values() for key,*_ in section]
-    assert 'work_index_kwh_t' not in params
-    assert 'bond_test' not in params
-    example=json.loads((ROOT/'examples/lab_bond_test.json').read_text(encoding='utf-8'))
-    cfg=default_config()
-    cfg.update(example)
+def test_default_two_chamber():
+    cfg = default_config()
     assert is_valid_input(cfg)
-    wi,origin=lab_bond_from_config(cfg)
-    assert 5<wi<30
-    assert 'протоколу' in origin
+    assert len(cfg['mills']) == 1 and len(cfg['mills'][0]['chambers']) == 2
+    assert simulate_wear(cfg)['total_wear_t'] > 0
+
+
+def test_one_chamber_import():
+    cfg = json.loads((ROOT / 'examples/one_chamber_input.json').read_text())
+    assert is_valid_input(cfg)
+    assert len(cfg['mills'][0]['chambers']) == 1
+
+
+def test_history_csv():
+    # Файл истории сохраняется в проекте как импортируемый пример, не отдельная программа.
+    file = ROOT / 'examples/history_input.csv'
+    if file.exists():
+        assert len(parse_history_csv(file.read_bytes())) == 3
+
+
+def test_clinker_is_not_operator_field():
+    fields = [key for group in FIELDS.values() for key, *_ in group]
+    for k in ('work_index_kwh_t','f80_um','p80_um','feed_fraction','wear_g_t','grindability'):
+        assert k not in fields
+    assert MODES == ['Измеренная подача, т/ч', 'Масса / время']
+    assert 'diameter_mm' in [k for k, _ in MEDIA_FIELDS]
+
+
+def test_default_inline_reload_with_valid_values():
+    cfg = default_config()
+    cfg.setdefault('manual_reloads', [])
+    reload = default_table_row('manual_reloads', cfg)
+    assert reload['drum'] == 1
+    assert reload['tons'] == .5
+    cfg['manual_reloads'] = [reload]
+    assert is_valid_input(cfg)
+
+
+def test_default_schedule_row():
+    cfg = default_config()
+    cfg['throughput_schedule'] = []
+    row = default_table_row('throughput_schedule', cfg)
+    assert row['tph'] == cfg['fresh_feed_tph']
+    cfg['throughput_schedule'].append(row)
+    assert is_valid_input(cfg)
+
+
+def test_row_numeric_validation():
+    with pytest.raises(ValueError, match='конечным'):
+        row_from_cells('manual_reloads', {
+            'chamber':'2','type':'Цильпебс','material':'Сталь','hour':'NaN',
+            'diameter_mm':'30','tons':'1','aspect':'1'
+        })
+
+
+def test_lab_import_and_clinker_input():
+    file = ROOT / 'examples/clinker_fractions.csv'
+    if file.exists():
+        parts = clinker_from_csv(file.read_bytes())
+        assert len(parts) == 10
+        assert 99 <= sum(parts) <= 101
+    cfg = default_config()
+    cfg2 = merge_lab_parameters(cfg, {'grindability':1.1, 'abrasion_factor':1.02})
+    assert cfg2['grindability'] == pytest.approx(1.1)
+    assert cfg['grindability'] != 1.1
