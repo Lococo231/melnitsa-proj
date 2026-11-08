@@ -1000,6 +1000,11 @@ class MillWindow(QMainWindow):
         QMessageBox.warning(self, 'Цементная мельница', text)
 
 
+from production_ui import install as install_production_ui
+install_production_ui(MillWindow)
+from workflow_ui import install as install_workflow_ui
+install_workflow_ui(MillWindow)
+
 def main():
     app = QApplication.instance() or QApplication(sys.argv)
     app.setStyle('Fusion')

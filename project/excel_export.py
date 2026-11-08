@@ -235,6 +235,10 @@ def export_excel(cfg: dict, run: dict) -> bytes:
             {"Раздел": "Осевой тест", "Источник": "Cement Mill Axial Test", "URL": "https://www.thecementgrindingoffice.com/Preview.pdf"},
         ]
         report.sheet("Источники", sources, {"URL": 70, "Источник": 47})
+        from production_export import extend_report
+        extend_report(wb, report, cfg, run, q1)
+        from shift_export import extend_shift_report
+        extend_shift_report(wb, report, cfg)
     finally:
         wb.close()
     return output.getvalue()
