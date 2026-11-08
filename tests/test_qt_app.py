@@ -15,7 +15,12 @@ def test_window_renders_and_calculates():
         assert len(window.collect_config()['mills']) == 1
         assert window.run_data is not None
         assert window.quality_data is not None
-        assert window.overview_plot.figure.axes
+        # После запуска открыта «Симуляция смен» — скрытый «Обзор» лениво
+        # строится только при переходе на него.
+        assert not window.overview_plot.figure.axes
+        window.right.setCurrentIndex(0)
+        window._render_active()
+        assert len(window.overview_plot.figure.axes) == 6
     finally:
         window.close()
         app.processEvents()
@@ -52,6 +57,8 @@ def test_sieve_and_feed_schedule_update_model():
         window.calculate(quiet=True)
         assert window.run_data is not None
         assert window.collect_config()['throughput_schedule'][0]['tph'] == 65
+        window.right.setCurrentIndex(0)
+        window._render_active()
         assert len(window.overview_plot.figure.axes) == 6
     finally:
         window.close()

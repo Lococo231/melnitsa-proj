@@ -15,8 +15,15 @@ def test_excel_export_has_data_and_charts():
         files = archive.namelist()
         charts = [name for name in files if name.startswith("xl/charts/chart") and name.endswith(".xml")]
         sheets = [name for name in files if name.startswith("xl/worksheets/sheet") and name.endswith(".xml")]
-        assert len(charts) == 10
-        assert len(sheets) == 11
+        # Новые отчётные листы дополняют существующие; число графиков
+        # зависит от наличия явно настроенного календаря смен.
+        assert len(charts) >= 10
+        assert len(sheets) >= 11
+        workbook = archive.read("xl/workbook.xml").decode("utf-8")
+        for name in ("Пробы_по_длине", "Начальная_загрузка",
+                     "Нормы_и_выпуск", "План_догрузки_к_концу",
+                     "Симуляция_смен", "Коррекция_загрузки", "Границы_цемента"):
+            assert name in workbook
         assert b"F80" in archive.read("xl/sharedStrings.xml")
         assert b"P80" in archive.read("xl/sharedStrings.xml")
         assert any("Производительность во времени".encode() in archive.read(name) for name in charts)

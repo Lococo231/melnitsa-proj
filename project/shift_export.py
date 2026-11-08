@@ -3,10 +3,24 @@ from __future__ import annotations
 
 from model import mass_kg
 from shift_simulation import simulate_shifts, operation_day
-from production_planning import PROFILES
+from production_planning import PROFILES, profile_name
 
 
 def extend_shift_report(wb, report, cfg):
+    # Старые конфигурации до внедрения смен не содержат календаря работы.
+    # Не подменяем его вымышленными днями и не обрезаем производственный график Q(t).
+    if 'simulation_days' not in cfg or 'simulation_hours_per_day' not in cfg:
+        profile=profile_name(cfg)
+        note='Не рассчитано: для сравнения смен задайте дни и часы работы в интерфейсе.'
+        report.sheet('Симуляция_смен', [{'Состояние':note}])
+        report.sheet('Коррекция_загрузки', [{'Состояние':note}])
+        report.sheet('Границы_цемента', [
+            {'Профиль':profile,'Показатель':key,
+             'Минимум':bound.get('min'),'Максимум':bound.get('max'),
+             'Тип':'Технологическая карта из HTML (не ГОСТ)'}
+            for key,bound in PROFILES[profile].items()
+        ] or [{'Профиль':profile,'Показатель':'Нет ограничений'}])
+        return
     result=simulate_shifts(cfg, optimize=True, observations=85)
     baseline=result['baseline']
     improved={round(row['hour'],8):row for row in (result.get('optimized') or [])}
