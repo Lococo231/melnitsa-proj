@@ -15,10 +15,10 @@ from PySide6.QtWidgets import (QComboBox, QDoubleSpinBox, QFormLayout, QGroupBox
     QHBoxLayout, QLabel, QPushButton, QSlider, QSpinBox, QTableWidget,
     QVBoxLayout, QWidget, QMessageBox, QScrollArea, QTableWidgetItem)
 
-from model import CLASSES, mass_kg
+from model import CLASSES, mass_kg, piece_count
 from production_planning import PROFILES, profile_name, QUALITY_NAMES
 from shift_simulation import METRIC_KEYS, simulate_shifts, operation_day
-from production_ui import _attach_slider, _attach_help, _fmt
+from production_ui import _attach_slider, _attach_help, _fmt, show_help_dialog
 
 PRESETS = {
     'Мельница №3 (HTML)': [0, 8.37, 21.99, 29.08, 18.32, 14.15, 5.48, 1.70, .50, .45],
@@ -55,11 +55,11 @@ def _clickable_label(form, field, help_text):
     label=form.labelForField(field)
     if isinstance(label,QLabel):
         orig=label.text()
-        label.setText(f'<a href="help" style="color:#84ddef;text-decoration:none">{html_escape(orig)} ⓘ</a>')
+        label.setText(f'<a href="help" style="color:#ffdb66;text-decoration:none">{html_escape(orig)} ⓘ</a>')
         label.setTextFormat(Qt.TextFormat.RichText)
         label.setTextInteractionFlags(Qt.TextInteractionFlag.LinksAccessibleByMouse)
         label.linkActivated.connect(lambda _=None,t=orig,msg=help_text:
-                                    QMessageBox.information(field.window(),t,msg))
+                                    show_help_dialog(field.window(),t,msg))
 
 
 def _make_slider(spin: QDoubleSpinBox, lower=0., upper=100.) -> QSlider:
@@ -116,10 +116,19 @@ def _sim_plot(window, result):
             ax.axvline(day*result['hours_per_day'],color='#446076',lw=.55,alpha=.55)
         if result.get('action'):
             ax.axvline(result['action']['hour'], color='#cba3ff', linestyle=':', lw=1.2)
-        ax.legend(loc='best', fontsize=7, ncol=2, frameon=False, labelcolor='#ebf5fc')
-    axes[-1].set_xlabel(f'Наработка, ч  ·  {result["hours_per_day"]:g} ч работы в день', color='#aec0ce')
-    panel.figure.subplots_adjust(hspace=.55, left=.10, right=.97, top=.96, bottom=.12)
-    panel.canvas.draw_idle()
+        ax.ticklabel_format(useOffset=False, axis='y')
+    # Общая легенда вне осей; не перекрывает изменения показателей.
+    from matplotlib.lines import Line2D
+    handles = [Line2D([0],[0], color='#e9ad73', lw=2, label='Без вмешательства')]
+    if improved:
+        handles.append(Line2D([0],[0], color='#66cbe1', lw=2, label='После коррекции'))
+    handles.append(Line2D([0],[0], color='#f26d76', linestyle='--', lw=1.5, label='Граница цели'))
+    handles.append(Line2D([0],[0], color='#ff5d69', linestyle='None', marker='o', label='Нарушение'))
+    panel.figure.legend(handles=handles, loc='upper center', bbox_to_anchor=(.52,.995),
+                        ncol=4, fontsize=8, frameon=False, labelcolor='#ebf5fc')
+    axes[-1].set_xlabel(f'Наработка, ч · {result["hours_per_day"]:g} ч работы в день',color='#aec0ce')
+    panel.figure.subplots_adjust(hspace=.88, left=.12, right=.985, top=.89, bottom=.10)
+    panel.set_time_range(result['hours'])
 
 
 def _render_summary(window, result):
@@ -136,7 +145,7 @@ def _render_summary(window, result):
     if act:
         unit = 'догрузить' if act['direction']=='add' else 'выгрузить'
         r = act['target']
-        msg += (f'\n{unit.capitalize()} {act["tons"]:.3f} т: камера {r["chamber"]}, '
+        msg += (f'\n{unit.capitalize()} {act["pieces"]} шт ({act["tons"]:.4f} т): камера {r["chamber"]}, '
                 f'{r["type"]}, {r["material"]}, Ø{r["diameter_mm"]:g} мм; '
                 f'в момент {operation_day(act["hour"],result["hours_per_day"])}. '
                 f'В пределах целей до ≈ {act["valid_to"]:g} ч работы.')
@@ -148,11 +157,11 @@ def _render_summary(window, result):
     window.sim_apply.setEnabled(bool(act and act['direction']=='add'))
     if act:
         r = act['target']
-        n = act['tons']*1000/mass_kg(r,r['diameter_mm'])
+        n = int(act['pieces'])
         rows = [{'Операция': 'Догрузка' if act['direction']=='add' else 'Выгрузка',
                  'Час':act['hour'], 'Камера':r['chamber'], 'Тип':r['type'],
                  'Материал':r['material'], 'Ø, мм':r['diameter_mm'],
-                 'Масса, т':act['tons'], 'Расч. шт':math.ceil(n),
+                 'Масса, т':act['tons'], 'Количество, шт':n,
                  'В норме после, ч':act['valid_hours']}]
     else:
         rows = [{'Состояние':'Не требуется' if bad is None else 'Допустимой одиночной операции не найдено'}]
@@ -241,8 +250,8 @@ def install(MillWindow):
         self.feed_preset.currentIndexChanged.connect(self._choose_feed_preset)
 
         # Восстановить импорт CSV из предыдущего меню.
-        # Меню принадлежит окну и используется всеми расширениями.
-        file_menu = self.file_menu
+        file_menu = next((action.menu() for action in self.menuBar().actions()
+                          if action.text().replace('&','')=='Файл'),None)
         if file_menu and not any('грансостава клинкера' in a.text() for a in file_menu.actions()):
             file_menu.addAction('Импорт грансостава клинкера CSV…',self.open_clinker)
 
@@ -251,10 +260,13 @@ def install(MillWindow):
         old_group = overview.layout().itemAt(0).widget()
         if isinstance(old_group, QGroupBox) and old_group.title()=='Контроль качества и производительности':
             old_group.hide()
+        tab_scroll = QScrollArea()
+        tab_scroll.setWidgetResizable(True)
         tab = QWidget()
         layout=QVBoxLayout(tab)
+        tab_scroll.setWidget(tab)
         self.sim_tab_index = self.right.tabs.count()
-        self.right.addTab(tab,'Симуляция смен')
+        self.right.addTab(tab_scroll,'Симуляция смен')
         options=QGroupBox('Режим и целевой цемент')
         form=QFormLayout(options)
         self.cement_profile=QComboBox()
@@ -328,6 +340,7 @@ def install(MillWindow):
         layout.addWidget(self.sim_status)
         PlotPanel=type(self.overview_plot)
         self.sim_plot=PlotPanel()
+        self.sim_plot.setMinimumHeight(640)
         layout.addWidget(self.sim_plot,1)
         self.sim_table=QTableWidget()
         self.sim_table.setMaximumHeight(120)

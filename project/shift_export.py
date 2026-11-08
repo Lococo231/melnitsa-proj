@@ -2,7 +2,8 @@
 from __future__ import annotations
 
 from model import mass_kg
-from shift_simulation import simulate_shifts, operation_day
+from shift_simulation import operation_day
+from operation_timeline import simulate_operation_timeline
 from production_planning import PROFILES, profile_name
 
 
@@ -21,7 +22,7 @@ def extend_shift_report(wb, report, cfg):
             for key,bound in PROFILES[profile].items()
         ] or [{'Профиль':profile,'Показатель':'Нет ограничений'}])
         return
-    result=simulate_shifts(cfg, optimize=True, observations=85)
+    result=simulate_operation_timeline(cfg, optimize=True, observations=85)
     baseline=result['baseline']
     improved={round(row['hour'],8):row for row in (result.get('optimized') or [])}
     rows=[]
@@ -51,14 +52,14 @@ def extend_shift_report(wb, report, cfg):
     act=result.get('action')
     if act:
         r=act['target']
-        pcs=act['tons']*1000/mass_kg(r,r['diameter_mm'])
+        pcs=int(act['pieces'])
         table=[{'Состояние':result['status'],
                 'Операция':'Догрузка' if act['direction']=='add' else 'Выгрузка',
                 'Час работы':act['hour'],
                 'День / час':operation_day(act['hour'],result['hours_per_day']),
                 'Камера':r['chamber'],'Тип':r['type'],
                 'Материал':r['material'],'Диаметр, мм':r['diameter_mm'],
-                'Масса, т':act['tons'],'Расчётное количество, шт':pcs,
+                'Масса, т':act['tons'],'Количество, шт':pcs,
                 'В пределах целей после, ч':act['valid_hours']}]
     else:
         table=[{'Состояние':result['status'],'Операция':'Нет'}]
@@ -74,3 +75,9 @@ def extend_shift_report(wb, report, cfg):
          'Тип':'Технологическая карта из HTML (не ГОСТ)'}
         for key,bound in PROFILES[result['profile']].items()
     ] or [{'Профиль':result['profile'],'Показатель':'Нет ограничений'}])
+    # История событий с рабочим часом и днём наработки.
+    for sheet,key in (('Изменения_цемента','cement_changes'),
+                      ('Изменения_тел','media_changes'),
+                      ('Изменения_параметров','parameter_changes')):
+        entries=result.get(key,[])
+        report.sheet(sheet,entries if entries else [{'Состояние':'Изменений нет'}])

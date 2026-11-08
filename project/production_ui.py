@@ -8,7 +8,7 @@ from PySide6.QtCore import Qt, QSignalBlocker
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (QComboBox, QDoubleSpinBox, QFormLayout, QGridLayout,
     QGroupBox, QHBoxLayout, QLabel, QPushButton, QSlider, QTableWidget,
-    QVBoxLayout, QWidget, QMessageBox)
+    QVBoxLayout, QWidget, QMessageBox, QDialog)
 
 from model import CLASSES, config_at_time
 from production_planning import (DEFAULT_PROFILE, PROFILES, assessments, plan_reload,
@@ -61,18 +61,37 @@ SLIDER_RANGES = {
 }
 
 
+def show_help_dialog(parent, title: str, message: str):
+    """Обычное диалоговое окно, а не системное уведомление со звуком."""
+    dialog = QDialog(parent)
+    dialog.setWindowTitle(title)
+    dialog.setMinimumWidth(420)
+    layout = QVBoxLayout(dialog)
+    label = QLabel(message)
+    label.setWordWrap(True)
+    label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+    layout.addWidget(label)
+    buttons = QHBoxLayout()
+    buttons.addStretch(1)
+    close = QPushButton('Закрыть')
+    close.clicked.connect(dialog.accept)
+    buttons.addWidget(close)
+    layout.addLayout(buttons)
+    dialog.exec()
+
+
 def _attach_help(form, widget, key):
     label = form.labelForField(widget)
     if not isinstance(label, QLabel):
         return
     original = label.text()
     hint = HELP.get(key, f'{original}: параметр технологической модели.')
-    label.setText(f'<a style="color:#84ddef; text-decoration:none" href="help">{original} ⓘ</a>')
+    label.setText(f'<a style="color:#ffdb66; text-decoration:none" href="help">{original} ⓘ</a>')
     label.setTextFormat(Qt.TextFormat.RichText)
     label.setTextInteractionFlags(Qt.TextInteractionFlag.LinksAccessibleByMouse)
     label.setToolTip('Нажмите для пояснения')
     label.linkActivated.connect(lambda _=None, title=original, message=hint:
-                                QMessageBox.information(widget.window(), title, message))
+                                show_help_dialog(widget.window(), title, message))
 
 
 def _attach_slider(form, spin, key):
@@ -168,8 +187,8 @@ def _plot_overview(window, cfg, run):
             ax.step(x, y, where='post', color=PALETTE[i])
         else:
             ax.plot(x, y, color=PALETTE[i])
-    panel.figure.subplots_adjust(hspace=.68, wspace=.40, left=.09, right=.98, top=.92, bottom=.12)
-    panel.canvas.draw_idle()
+    panel.figure.subplots_adjust(hspace=.68, wspace=.42, left=.09, right=.98, top=.92, bottom=.12)
+    panel.set_time_range(run['rows'][-1]['hours'])
 
 
 def _plot_quality(window, cfg, quality):
@@ -221,9 +240,11 @@ def _plot_fractions(window, cfg, run):
                     [r.get(name, math.nan) for r in hist], lw=1.4,
                     color=PALETTE[i%len(PALETTE)], label=name.replace(' · ', ' '))
         if ax == axes[0] and names:
-            ax.legend(fontsize=6, frameon=False, labelcolor='#ebf5fc', ncol=2)
-    panel.figure.subplots_adjust(hspace=.7, left=.12, right=.97, top=.94, bottom=.10)
-    panel.canvas.draw_idle()
+            panel.figure.legend(ax.get_lines(), [line.get_label() for line in ax.get_lines()],
+                                loc='center left', bbox_to_anchor=(.67,.52),
+                                fontsize=7, frameon=False, labelcolor='#ebf5fc')
+    panel.figure.subplots_adjust(hspace=.98, left=.11, right=.65, top=.94, bottom=.10)
+    panel.set_time_range(run['rows'][-1]['hours'])
 
 
 def _plot_forecast(window, cfg, run):
@@ -241,8 +262,8 @@ def _plot_forecast(window, cfg, run):
         b.plot(x, [r[key] for r in run['rows']], label=f'Камера {i}',
                color=PALETTE[(i+2)%len(PALETTE)])
     b.legend(fontsize=7, frameon=False, labelcolor='#ebf5fc')
-    panel.figure.subplots_adjust(hspace=.55, left=.11, right=.97, top=.94, bottom=.11)
-    panel.canvas.draw_idle()
+    panel.figure.subplots_adjust(hspace=.72, left=.12, right=.97, top=.94, bottom=.10)
+    panel.set_time_range(run['rows'][-1]['hours'])
 
 
 def _plot_start(window, cfg):
@@ -294,8 +315,8 @@ def install(MillWindow):
                                  'Импорт протокола Бонда JSON',
                                  'Импорт грансостава CSV', 'Импорт журнала CSV'):
                 button.hide()
-        # Используем живую ссылку владельца, а не временный QAction.menu().
-        file_menu = self.file_menu
+        file_menu = next((action.menu() for action in self.menuBar().actions()
+                          if action.text().replace('&', '') == 'Файл'), None)
         if file_menu:
             for action in list(file_menu.actions()):
                 if ('Бонда' in action.text() or 'грансостава клинкера' in action.text()):
@@ -352,6 +373,7 @@ def install(MillWindow):
         self.forecast_summary.setWordWrap(True)
         layout.addWidget(self.forecast_summary)
         self.forecast_plot = PlotPanel()
+        self.forecast_plot.setMinimumHeight(530)
         layout.addWidget(self.forecast_plot, 2)
         self.forecast_table = QTableWidget()
         self._read_only_table(self.forecast_table)
@@ -441,13 +463,12 @@ def install(MillWindow):
             self.optimization_note.setText(plan['status'] +
                 f". Всего: {plan['total_t']:.3f} т; профиль: {profile_name(cfg)}. "
                 'Производительность Q зафиксирована исходными измерениями, а не оптимизируется моделью.')
-            from model import mass_kg
+            from model import piece_count
             rows = []
             for r in plan['rows']:
                 rows.append({'Камера': r['chamber'], 'Тип': r['type'], 'Материал': r['material'],
                             'Ø, мм': r['diameter_mm'], 'Догрузить, т': r['initial_t'],
-                            'Догрузить, шт': math.ceil(r['initial_t']*1000/
-                                                       mass_kg(r, r['diameter_mm']))})
+                            'Догрузить, шт': piece_count(r, r['initial_t'])})
             if not rows:
                 rows = [{'Результат': 'Подходящей или необходимой догрузки нет'}]
             self._populate_result(self.reco_table, rows, list(rows[0]))

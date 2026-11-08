@@ -10,11 +10,12 @@
 from __future__ import annotations
 
 from copy import deepcopy
+import math
 from math import ceil, isfinite
 
 from model import (MATERIALS, chamber_info, cohort_mass, config_at_time,
                    initial_cohorts, make_weights, mass_kg, quality_at,
-                   throughput_at, validate)
+                   throughput_at, validate, piece_count, mass_for_count_t)
 from production_planning import PROFILES, profile_name, assessments
 
 METRIC_KEYS = ('r008', 'r0045', 'blaine_proxy')
@@ -72,11 +73,14 @@ def _install_manual(cfg: dict, cohorts: list[dict], when: float) -> None:
         if abs(float(r['hour']) - when) > 1e-6:
             continue
         item = {**r, 'initial_t': float(r['tons']), 'drum': 1}
-        piece = mass_kg(item, float(item['diameter_mm']))
-        cohorts.append({**item, 'id': 100000+idx, 'batch': 100000+idx,
+        pieces = piece_count(item, item['initial_t'])
+        if not pieces:
+            continue
+        actual_t = mass_for_count_t(item, pieces)
+        cohorts.append({**item, 'initial_t': actual_t, 'id': 100000+idx,
+                        'batch': 100000+idx,
                         'd0': item['diameter_mm'], 'd': item['diameter_mm'],
-                        'n': item['initial_t']*1000/piece,
-                        'initial_kg': item['initial_t']*1000,
+                        'n': pieces, 'initial_kg': actual_t*1000,
                         'cumulative_loss_kg': 0.})
 
 
@@ -139,38 +143,71 @@ def _calculate(cfg: dict, ticks: list[float], observed: set[float],
     return results, states
 
 
+def _group_key(c: dict) -> tuple:
+    return (int(c['chamber']), c['type'], c['material'],
+            float(c['d0']), float(c.get('aspect', 1.)))
+
+
+def _removal_distribution(group: list[dict], pieces: int) -> list[int]:
+    """Снимаем ЦЕЛЫЕ тела с отдельных партий методом наибольших остатков."""
+    numbers = [int(c['n']) for c in group]
+    total = sum(numbers)
+    if not 0 <= pieces <= total:
+        raise ValueError('Выгрузка больше доступного количества мелющих тел')
+    if total == 0:
+        return [0 for _ in group]
+    shares = [pieces * n / total for n in numbers]
+    taken = [min(n, int(math.floor(s))) for n, s in zip(numbers, shares)]
+    missing = pieces - sum(taken)
+    order = sorted(range(len(group)), key=lambda i:(shares[i]-taken[i], numbers[i]), reverse=True)
+    for index in order:
+        if missing <= 0:
+            break
+        if taken[index] < numbers[index]:
+            taken[index] += 1
+            missing -= 1
+    assert sum(taken) == pieces
+    return taken
+
+
 def _change_media(cfg: dict, cohorts: list[dict], action: dict) -> None:
-    sign = action['direction']
+    direction = action['direction']
     target = action['target']
-    amt = float(action['tons'])
-    if amt <= 0:
-        return
-    key = (target['chamber'], target['type'], target['material'],
-           target['diameter_mm'], target.get('aspect', 1.0))
-    if sign == 'add':
-        row = {k: v for k, v in zip(('chamber', 'type', 'material', 'diameter_mm', 'aspect'), key)}
-        row.update(drum=1, initial_t=amt)
-        new = initial_cohorts({**cfg, 'media': [row]})[0]
+    key = (int(target['chamber']), target['type'], target['material'],
+           float(target['diameter_mm']), float(target.get('aspect',1.)))
+    row = {k: v for k, v in zip(('chamber','type','material','diameter_mm','aspect'), key)}
+    row['drum'] = 1
+    if direction == 'add':
+        pieces = int(action.get('pieces', piece_count(row, action.get('tons', 0.))))
+        if pieces <= 0:
+            return
+        real_t = mass_for_count_t(row, pieces)
+        new = initial_cohorts({**cfg, 'media': [{**row, 'initial_t': real_t}]})[0]
         new['id'] = max((c.get('id', 0) for c in cohorts), default=0) + 1
         new['batch'] = 200000 + new['id']
         cohorts.append(new)
         return
-    if sign != 'remove':
+    if direction != 'remove':
         raise ValueError('Операция должна быть add или remove')
-    # Удаляем ФИЗИЧЕСКИЕ тела одной фракции пропорционально; диаметры оставшихся
-    # не меняются сразу после выгрузки, в отличие от действия абразивного износа.
-    group = [c for c in cohorts if (c['chamber'], c['type'], c['material'],
-             c['d0'], c.get('aspect', 1.)) == key and c['n'] > 0]
-    available = sum(cohort_mass(c) for c in group) / 1000
-    if amt > available + 1e-8:
-        raise ValueError('Выгрузка больше доступной массы фракции')
-    ratio = max(0., 1. - amt/max(available, 1e-10))
-    for c in group:
-        c['n'] *= ratio
-        c['initial_kg'] *= ratio
-        c['cumulative_loss_kg'] *= ratio
+    group = [c for c in cohorts if _group_key(c) == key and c['n'] > 0]
+    available_pieces = sum(int(c['n']) for c in group)
+    if not group:
+        return
+    avg_kg = sum(cohort_mass(c) for c in group) / available_pieces
+    pieces = int(action.get('pieces', math.floor(action.get('tons',0.)*1000/avg_kg + 0.5)))
+    allocation = _removal_distribution(group, pieces)
+    for c, n_removed in zip(group, allocation):
+        if not n_removed:
+            continue
+        original_count = int(c['n'])
+        remaining_count = original_count - n_removed
+        fraction = remaining_count / original_count
+        c['n'] = remaining_count
+        c['initial_kg'] *= fraction
+        c['cumulative_loss_kg'] *= fraction
         if 'removed_kg' in c:
-            c['removed_kg'] *= ratio
+            c['removed_kg'] *= fraction
+    # Физический диаметр оставшихся тел при выгрузке не изменяется.
 
 
 def _reference_weight(cfg: dict) -> float:
@@ -182,41 +219,56 @@ def _reference_weight(cfg: dict) -> float:
 
 
 def _candidates(cfg: dict, cohorts: list[dict], hour: float, limit: int = 160):
-    """Дискретный поиск по представленным фракциям, ±5..35% массы."""
+    """Предлагаем не проценты тел, а точное целое число штук; масса производная."""
     seen = set()
+    seen_actions = set()
     infos = chamber_info(cfg, cohorts)
     fill_by_ch = {x['chamber']: x['fill_j'] for x in infos}
     for c in cohorts:
-        if c['n'] <= 0:
+        if not c['n']:
             continue
-        key = (int(c['chamber']), c['type'], c['material'], float(c['d0']),
-               float(c.get('aspect', 1.)))
+        key = _group_key(c)
         if key in seen:
             continue
         seen.add(key)
-        available = sum(cohort_mass(p) for p in cohorts if
-                        (int(p['chamber']),p['type'],p['material'],float(p['d0']),
-                         float(p.get('aspect',1.))) == key) / 1000
-        base = sum(float(r['initial_t']) for r in cfg['media'] if
-                   (int(r['chamber']),r['type'],r['material'],float(r['diameter_mm']),
-                    float(r.get('aspect',1.))) == key)
-        # Для всех направлений не более 35% массы данной фракции.
+        group = [p for p in cohorts if _group_key(p) == key and p['n'] > 0]
+        total_pieces = sum(int(p['n']) for p in group)
+        live_t = sum(cohort_mass(p) for p in group) / 1000.
+        nominal_t = sum(float(r['initial_t']) for r in cfg['media'] if
+                        (int(r['chamber']), r['type'], r['material'],
+                         float(r['diameter_mm']), float(r.get('aspect',1.))) == key)
+        row = dict(zip(('chamber','type','material','diameter_mm','aspect'), key))
+        row['drum'] = 1
         for direction in ('add','remove'):
             for fraction in (.05,.10,.15,.20,.25,.30,.35):
-                amt = round(max(base, available) * fraction, 4)
-                if amt <= 0 or (direction == 'remove' and amt >= available - 1e-8):
+                desired_t = max(nominal_t, live_t) * fraction
+                if direction == 'add':
+                    pieces = piece_count(row, desired_t)
+                    real_t = mass_for_count_t(row, pieces)
+                else:
+                    if not total_pieces:
+                        continue
+                    pieces = int(math.floor(desired_t * 1000. / (live_t * 1000. / total_pieces) + 0.5))
+                    if pieces >= total_pieces:
+                        continue
+                    allocation = _removal_distribution(group, pieces)
+                    real_t = sum(n * mass_kg(p, p['d']) for p,n in zip(group,allocation)) / 1000.
+                if pieces <= 0 or real_t <= 0:
                     continue
-                row = dict(zip(('chamber','type','material','diameter_mm','aspect'), key))
-                act = {'hour':hour,'direction':direction,'tons':amt,'target':row}
-                # Быстрый фильтр объёмной доли заполнения.
+                token = (key, direction, pieces)
+                if token in seen_actions:
+                    continue
+                seen_actions.add(token)
+                action = {'hour':hour, 'direction':direction, 'pieces':pieces,
+                          'tons':real_t, 'target':{k:row[k] for k in
+                          ('chamber','type','material','diameter_mm','aspect')}}
+                # Предварительная оценка изменения заполнения камер.
                 density = MATERIALS[key[2]]['rho']
-                ch = infos[key[0]-1]
-                # Консервативная верхняя оценка россыпного объёма.
-                dJ = (amt*1000/density)/(.585*ch['volume_m3'])
-                fill_new = fill_by_ch[key[0]] + (dJ if direction == 'add' else -dJ)
-                if not (MIN_FILL <= fill_new <= MAX_FILL):
-                    continue
-                yield act
+                chamber = infos[key[0]-1]
+                delta_j = (real_t*1000. / density) / (.585*chamber['volume_m3'])
+                fill_new = fill_by_ch[key[0]] + (delta_j if direction=='add' else -delta_j)
+                if MIN_FILL <= fill_new <= MAX_FILL:
+                    yield action
 
 
 def _time_in_spec(rows: list[dict], start: float, end: float) -> float:

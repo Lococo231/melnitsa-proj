@@ -38,5 +38,6 @@ def test_removal_keeps_remaining_diameter():
                    'material':cohort['material'],'diameter_mm':cohort['d0'],
                    'aspect':cohort.get('aspect',1.)}}
     _change_media(cfg,[cohort],act)
-    assert abs(cohort_mass(cohort)/1000-available*.9)<1e-7
+    assert isinstance(cohort['n'], int)
+    assert abs(cohort_mass(cohort)/1000-available*.9)<=mass_kg(cohort,cohort['d'])/1000
     assert cohort['d']==before

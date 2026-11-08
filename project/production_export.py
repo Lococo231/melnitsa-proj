@@ -8,6 +8,8 @@ from model import mass_kg
 from production_planning import (assessments, plan_reload, profile_name,
                                  starting_media)
 
+from model import piece_count
+
 
 def extend_report(wb, report, cfg, run, final_quality):
     """Вызывается ДО wb.close() в существующем export_excel()."""
@@ -29,16 +31,16 @@ def extend_report(wb, report, cfg, run, final_quality):
         sh.write(end_row + 1, 0, 'ИТОГО, т', report.emphasis)
         sh.write_number(end_row + 1, cols.index('Начальная масса, т'),
                         sum(r['Начальная масса, т'] for r in load), report.emphasis)
-        sh.write(end_row + 3, 0, 'Количество штук расчётное: масса / масса одного тела; не инвентаризационный счёт.')
+        sh.write(end_row + 3, 0, 'Количество тел целое, масса приведена к нему; округление half-up при вводе тонн.')
 
     plan = plan_reload(cfg, run)
     plan_rows = []
     for media in plan['rows']:
-        count = media['initial_t'] * 1000 / mass_kg(media, media['diameter_mm'])
+        count = piece_count(media, media['initial_t'])
         plan_rows.append({'Камера': media['chamber'], 'Тип': media['type'],
                           'Материал': media['material'], 'Ø, мм': media['diameter_mm'],
                           'L/D': media['aspect'], 'Догрузить, т': media['initial_t'],
-                          'Расчётное число, шт': count})
+                          'Количество, шт': count})
     if not plan_rows:
         plan_rows = [{'Состояние': 'Нулевой расчётный объём / отсутствует допустимый сценарий'}]
     sh, _, end = report.sheet('План_догрузки_к_концу', plan_rows)

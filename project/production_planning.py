@@ -7,7 +7,7 @@ from __future__ import annotations
 from copy import deepcopy
 import math
 
-from model import (chamber_info, cohort_mass, config_at_time, initial_cohorts,
+from model import (piece_count, mass_for_count_t, chamber_info, cohort_mass, config_at_time, initial_cohorts,
                    mass_kg, quality_at, throughput_at)
 
 # Подтверждённый в постановке профиль предприятия. Другие профили добавляются
@@ -99,9 +99,12 @@ def _shortfall_rows(cfg: dict, run: dict) -> list[dict]:
 
 
 def _extra_cohorts(cfg: dict, rows: list[dict], scale: float) -> tuple[list[dict], list[dict]]:
-    media = [{k: row[k] for k in ('drum', 'chamber', 'type', 'material', 'diameter_mm', 'aspect')}
-             | {'initial_t': row['shortfall_t'] * scale}
-             for row in rows if row['shortfall_t'] * scale > 1e-9]
+    media = []
+    for row in rows:
+        candidate = {k: row[k] for k in ('drum', 'chamber', 'type', 'material', 'diameter_mm', 'aspect')}
+        count = piece_count(candidate, row['shortfall_t'] * scale)
+        if count:
+            media.append({**candidate, 'initial_t': mass_for_count_t(candidate, count)})
     shadow = deepcopy(cfg)
     shadow['media'] = media
     return initial_cohorts(shadow), media
@@ -187,8 +190,8 @@ def starting_media(cfg: dict) -> list[dict]:
             'Камера': int(row['chamber']), 'Тип': row['type'],
             'Материал': row['material'], 'Ø, мм': float(row['diameter_mm']),
             'L/D': float(row.get('aspect', 1.)),
-            'Начальная масса, т': float(row['initial_t']),
-            'Расчётное количество, шт': (1000.0 * float(row['initial_t']) / piece)
-            if piece > 0 else 0.0,
+            'Задано, т': float(row['initial_t']),
+            'Начальная масса, т': mass_for_count_t(row, piece_count(row, row['initial_t'])),
+            'Количество, шт': piece_count(row, row['initial_t']),
         })
     return result

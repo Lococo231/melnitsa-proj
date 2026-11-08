@@ -16,7 +16,7 @@ from PySide6.QtGui import QColor, QFont
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QSplitter, QVBoxLayout, QHBoxLayout,
     QFormLayout, QGridLayout, QGroupBox, QScrollArea, QLabel, QPushButton,
-    QComboBox, QTabWidget, QDoubleSpinBox, QSpinBox, QLineEdit, QCheckBox,
+    QComboBox, QTabWidget, QDoubleSpinBox, QSpinBox, QSlider, QLineEdit, QCheckBox,
     QTableWidget, QTableWidgetItem, QHeaderView, QAbstractItemView,
     QStyledItemDelegate, QFileDialog, QMessageBox, QMenu, QFrame, QSizePolicy,
 )
@@ -200,9 +200,101 @@ class PlotPanel(QWidget):
         self.figure = Figure(facecolor=PANEL, dpi=100, figsize=(9, 6))
         self.canvas = FigureCanvasQTAgg(self.figure)
         self.canvas.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
-        self.toolbar = NavigationToolbar2QT(self.canvas, self)
-        layout.addWidget(self.toolbar)
+        # Вместо панели Matplotlib: курсор наработки и поле времени.
+        self.toolbar = None
         layout.addWidget(self.canvas, 1)
+        self.time_controls = QWidget(self)
+        line = QHBoxLayout(self.time_controls)
+        line.setContentsMargins(4, 1, 4, 1)
+        self.hour_label = QLabel('Час работы:')
+        line.addWidget(self.hour_label)
+        self.hour_slider = QSlider(Qt.Orientation.Horizontal)
+        self.hour_slider.setRange(0, 1000)
+        line.addWidget(self.hour_slider, 1)
+        self.hour_spin = QDoubleSpinBox()
+        self.hour_spin.setDecimals(2)
+        self.hour_spin.setRange(0., 100000.)
+        self.hour_spin.setSuffix(' ч')
+        self.hour_spin.setMaximumWidth(125)
+        line.addWidget(self.hour_spin)
+        layout.addWidget(self.time_controls)
+        self.hour_readout = QLabel('')
+        self.hour_readout.setWordWrap(True)
+        self.hour_readout.setStyleSheet('color: #aec0ce')
+        layout.addWidget(self.hour_readout)
+        self.time_controls.hide()
+        self.hour_readout.hide()
+        self._hour_max = 0.
+        self._hour_started = False
+        self._cursor_artists = []
+        self.hour_slider.valueChanged.connect(self._hour_from_slider)
+        self.hour_spin.valueChanged.connect(self._hour_from_spin)
+
+    def _hour_from_slider(self, value: int):
+        hour = self._hour_max * value / 1000.
+        with QSignalBlocker(self.hour_spin):
+            self.hour_spin.setValue(hour)
+        self._update_hour_cursor()
+
+    def _hour_from_spin(self, value: float):
+        fraction = value / self._hour_max if self._hour_max else 0.
+        with QSignalBlocker(self.hour_slider):
+            self.hour_slider.setValue(round(1000 * max(0., min(1., fraction))))
+        self._update_hour_cursor()
+
+    def set_time_range(self, max_hours: float):
+        """Подключить управление часом к уже построенным временным осям."""
+        hours = max(0., float(max_hours))
+        if not self._hour_started:
+            requested = hours
+        else:
+            requested = min(hours, self.hour_spin.value())
+        self._hour_max = hours
+        self._hour_started = True
+        with QSignalBlocker(self.hour_spin), QSignalBlocker(self.hour_slider):
+            self.hour_spin.setRange(0., max(hours, .01))
+            self.hour_spin.setValue(requested)
+            self.hour_slider.setValue(round(1000*requested/hours) if hours else 0)
+        self.time_controls.show()
+        self.hour_readout.show()
+        self._cursor_artists = []
+        self._update_hour_cursor()
+
+    def _update_hour_cursor(self):
+        hour = self.hour_spin.value()
+        for artist in self._cursor_artists:
+            try:
+                artist.remove()
+            except (ValueError, AttributeError):
+                pass
+        self._cursor_artists = []
+        descriptions = []
+        for ax in self.figure.axes:
+            for line in ax.get_lines():
+                label = line.get_label()
+                if not label or label.startswith('_'):
+                    continue
+                xs = line.get_xdata()
+                ys = line.get_ydata()
+                if len(xs) < 2 or len(xs) != len(ys):
+                    continue
+                try:
+                    if abs(float(xs[-1]) - float(xs[0])) < 1e-8:
+                        continue
+                    index = min(range(len(xs)), key=lambda i: abs(float(xs[i])-hour))
+                    reading = float(ys[index])
+                except (ValueError, TypeError, IndexError, OverflowError):
+                    continue
+                if math.isfinite(reading):
+                    descriptions.append(f'{ax.get_title() or label}: {reading:.3f}')
+                break
+            self._cursor_artists.append(ax.axvline(hour, color='#eaf5ff', lw=1.0,
+                                                   alpha=.85, linestyle=':',
+                                                   label='_nolegend_', zorder=6))
+        preview = '  |  '.join(descriptions[:3])
+        self.hour_readout.setText(f'Выбранный час: {hour:.2f}  ·  {preview}' if preview
+                                  else f'Выбранный час: {hour:.2f}')
+        self.canvas.draw_idle()
 
     def axis(self, ax, heading, xlabel='Наработка, ч', ylabel=''):
         ax.set_facecolor(PANEL)
@@ -1009,6 +1101,8 @@ from production_ui import install as install_production_ui
 install_production_ui(MillWindow)
 from workflow_ui import install as install_workflow_ui
 install_workflow_ui(MillWindow)
+from timeline_ui import install as install_timeline_ui
+install_timeline_ui(MillWindow)
 
 def main():
     app = QApplication.instance() or QApplication(sys.argv)

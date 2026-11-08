@@ -168,6 +168,26 @@ def mass_kg(row:dict, diameter:float) -> float:
     return volume * MATERIALS[row["material"]]["rho"]
 
 
+def piece_count(row: dict, tons: float, diameter: float | None = None) -> int:
+    """Ближайшее целое число тел для заданной массы; правило half-up.
+
+    Масса возвращается к точному количеству тел, не наоборот.
+    """
+    each = mass_kg(row, row['diameter_mm'] if diameter is None else diameter)
+    if each <= 0:
+        raise ValueError('Масса одного мелющего тела должна быть положительной')
+    if not math.isfinite(float(tons)) or float(tons) < 0:
+        raise ValueError('Масса загрузки должна быть конечной и неотрицательной')
+    return max(0, int(math.floor(float(tons) * 1000.0 / each + 0.5)))
+
+
+def mass_for_count_t(row: dict, count: int, diameter: float | None = None) -> float:
+    """Фактическая масса строго целого количества штук, т."""
+    if isinstance(count, bool) or not isinstance(count, int) or count < 0:
+        raise ValueError('Количество мелющих тел должно быть целым неотрицательным числом')
+    return count * mass_kg(row, row['diameter_mm'] if diameter is None else diameter) / 1000.0
+
+
 def surface_m2(row:dict, diameter:float) -> float:
     d = diameter/1000
     return math.pi*d*d if row["type"]=="Шары" else math.pi*d*d*(row.get("aspect",1.0)+0.5)
@@ -177,11 +197,13 @@ def initial_cohorts(cfg:dict) -> list[dict]:
     out=[]
     for i,row in enumerate(cfg["media"]):
         if row["initial_t"] <= 0: continue
-        each=mass_kg(row,row["diameter_mm"])
-        count=row["initial_t"]*1000/each
+        count = piece_count(row, row['initial_t'])
+        if count == 0:
+            continue
+        actual_kg = mass_for_count_t(row, count) * 1000.0
         out.append({**deepcopy(row),"id":i,"batch":0,"n":count,
                     "d":row["diameter_mm"],"d0":row["diameter_mm"],
-                    "initial_kg":row["initial_t"]*1000,"cumulative_loss_kg":0.0})
+                    "initial_kg":actual_kg,"cumulative_loss_kg":0.0})
     return out
 
 
@@ -321,8 +343,12 @@ def simulate_wear(cfg:dict) -> dict:
             rr=scheduled[scheduled_index];scheduled_index+=1
             if rr.get("tons",0)<=0:continue
             row=media_row(int(rr["drum"]),int(rr["chamber"]),float(rr["diameter_mm"]),float(rr["tons"]),rr["type"],rr["material"],float(rr.get("aspect",1)))
-            cohorts.append({**row,"id":len(cohorts),"batch":scheduled_index,"n":row["initial_t"]*1000/mass_kg(row,row["diameter_mm"]),"d":row["diameter_mm"],"d0":row["diameter_mm"],"initial_kg":row["initial_t"]*1000,"cumulative_loss_kg":0})
-            events.append({"hour":t0,**row})
+            number = piece_count(row, row['initial_t'])
+            if number == 0:
+                continue
+            actual_t = mass_for_count_t(row, number)
+            cohorts.append({**row,"initial_t":actual_t,"id":len(cohorts),"batch":scheduled_index,"n":number,"d":row["diameter_mm"],"d0":row["diameter_mm"],"initial_kg":actual_t*1000,"cumulative_loss_kg":0})
+            events.append({"hour":t0,**row,"tons":actual_t,"count":number})
         infos=chamber_info(cfg,cohorts)
         wts=make_weights(cfg,cohorts,infos)
         # dM = Q*dt * GMCR_ref [g/t] /1000 [g/kg] * relative contact area, kg
@@ -340,7 +366,7 @@ def simulate_wear(cfg:dict) -> dict:
                 # Учтём остаток выбракованной партии отдельно от истирания.
                 rem=cohort_mass(c)
                 c["removed_kg"]=c.get("removed_kg",0)+rem
-                c["n"]=0.0
+                c["n"]=0
         production_sum+=Q*dt
         hist.append(snapshot(cohorts,cfg,t1,production_sum,loss_sum,throughput_at(cfg,t1)))
         dh,mh=fractions_at(cohorts,t1)
@@ -349,7 +375,13 @@ def simulate_wear(cfg:dict) -> dict:
         coefficient_history.append(coefficient_at(cfg,cohorts,w_ref,t1))
     for rr in scheduled[scheduled_index:]:
         if rr.get("hour",0)<=horizon:
-            events.append({"hour":rr["hour"],**rr})
+            row = media_row(int(rr['drum']),int(rr['chamber']),float(rr['diameter_mm']),
+                            float(rr['tons']),rr['type'],rr['material'],
+                            float(rr.get('aspect',1.)))
+            number = piece_count(row, float(rr['tons']))
+            if number:
+                events.append({**rr,"hour":rr["hour"],"tons":mass_for_count_t(row,number),
+                               "count":number})
     # строка на каждую исходную фракцию: накопленные массы, а не только первый cohort
     result=[]
     for c in cohorts:
