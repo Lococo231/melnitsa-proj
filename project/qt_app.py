@@ -246,7 +246,10 @@ class MillWindow(QMainWindow):
         self._loading = False
 
     def _build(self):
-        menu = self.menuBar().addMenu('Файл')
+        # Держим Python-ссылку на QMenu на протяжении жизни окна (важно для PySide6).
+        self.file_menu = QMenu('Файл', self)
+        self.menuBar().addMenu(self.file_menu)
+        menu = self.file_menu
         for title, action in [
             ('Импорт параметров JSON…', self.open_json),
             ('Импорт грансостава клинкера CSV…', self.open_clinker),
@@ -256,7 +259,9 @@ class MillWindow(QMainWindow):
             ('Экспорт отчёта Excel…', self.save_excel),
         ]:
             menu.addAction(title, action)
-        model_menu = self.menuBar().addMenu('Модель')
+        self.model_menu = QMenu('Модель', self)
+        self.menuBar().addMenu(self.model_menu)
+        model_menu = self.model_menu
         model_menu.addAction('Рассчитать', lambda: self.calculate(quiet=False))
         model_menu.addAction('Восстановить пример мельницы №3', self.reset)
         base = QWidget()

@@ -241,8 +241,8 @@ def install(MillWindow):
         self.feed_preset.currentIndexChanged.connect(self._choose_feed_preset)
 
         # Восстановить импорт CSV из предыдущего меню.
-        file_menu = next((action.menu() for action in self.menuBar().actions()
-                          if action.text().replace('&','')=='Файл'),None)
+        # Меню принадлежит окну и используется всеми расширениями.
+        file_menu = self.file_menu
         if file_menu and not any('грансостава клинкера' in a.text() for a in file_menu.actions()):
             file_menu.addAction('Импорт грансостава клинкера CSV…',self.open_clinker)
 

@@ -1,4 +1,4 @@
-"""Smoke-тесты GUI PySide6 в headless-режиме для GitHub Actions."""
+"""Локальные smoke-тесты GUI PySide6 в headless-режиме."""
 import os
 os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
 
@@ -75,6 +75,22 @@ def test_chamber_count_and_adaptive_tabs():
         window.left.resize(330, 500)
         app.processEvents()
         assert window.left.picker.isVisible() or not window.left.isVisible()
+    finally:
+        window.close()
+        app.processEvents()
+
+
+def test_menu_lifetime_after_extensions():
+    """Меню должны существовать и после построения расширений окна."""
+    app = QApplication.instance() or QApplication([])
+    window = MillWindow()
+    try:
+        titles = [action.text() for action in window.file_menu.actions()]
+        assert any('Импорт грансостава клинкера' in name for name in titles)
+        assert any('Экспорт отчёта Excel' in name for name in titles)
+        assert window.file_menu.title() == 'Файл'
+        assert window.model_menu.title() == 'Модель'
+        assert window.model_menu.actions()
     finally:
         window.close()
         app.processEvents()

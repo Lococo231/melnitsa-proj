@@ -294,8 +294,8 @@ def install(MillWindow):
                                  'Импорт протокола Бонда JSON',
                                  'Импорт грансостава CSV', 'Импорт журнала CSV'):
                 button.hide()
-        file_menu = next((action.menu() for action in self.menuBar().actions()
-                          if action.text().replace('&', '') == 'Файл'), None)
+        # Используем живую ссылку владельца, а не временный QAction.menu().
+        file_menu = self.file_menu
         if file_menu:
             for action in list(file_menu.actions()):
                 if ('Бонда' in action.text() or 'грансостава клинкера' in action.text()):

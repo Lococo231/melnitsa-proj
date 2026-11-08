@@ -45,3 +45,10 @@
 - Удалён `.github/workflows/tests.yml`: GitHub больше не запускает pytest при push и pull request для данного проекта.
 - Локальные тесты `tests/`, конфигурация `pytest.ini` и `requirements-dev.txt` сохранены.
 - `README.md`, `AGENTS.md`, `doc/todo.md` и план фазы 1 обновлены: ручное тестирование, без обязательного CI.
+
+## Windows/PySide6 — исправление жизненного цикла QMenu
+
+- Меню «Файл» и «Модель» закреплены за `MillWindow` как `self.file_menu` и `self.model_menu` с родителем `QMainWindow`.
+- `production_ui.py` и `workflow_ui.py` используют то же сохранённое меню, а не временный результат `QAction.menu()`.
+- Устранена причина `RuntimeError: Internal C++ object (PySide6.QtWidgets.QMenu) already deleted` при запуске на Windows. Реальный запуск GUI на Windows требует проверки пользователем.
+- Добавлена локальная регрессионная проверка доступа к обоим меню; автоматические GitHub Actions-тесты не восстанавливались.
