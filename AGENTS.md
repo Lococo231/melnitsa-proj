@@ -4,11 +4,11 @@
 Настольный исследовательский симулятор цементной шаровой мельницы. Текущая реализация моделирует **один барабан с одной или двумя камерами** (не четыре мельницы одновременно). Отображает эволюцию состава мелющей загрузки, износ, догрузки, условную тонкость помола, ситовые остатки, производительность Q(t), выпускает Excel-отчёт. Прогноз без калибровки НЕ является заводским измерением или достоверной рекомендацией для оборудования.
 
 ## Стек и структура
-- Python 3.11/3.13 в GitHub Actions; PySide6 (Qt 6) — настольный UI; Matplotlib + QtAgg — графики; XlsxWriter — Excel; pytest — тестирование.
+- Python 3.11/3.13; PySide6 (Qt 6) — настольный UI; Matplotlib + QtAgg — графики; XlsxWriter — Excel; pytest — локальное тестирование без автоматического GitHub Actions.
 - `main.py` — основной entrypoint; `project/app.py` — альтернативный запуск.
 - `project/qt_app.py` — UI и интеграция; `project/ui_data.py` — преобразование/валидация UI; `project/model.py` — единственный источник математических расчётов.
 - `project/calibration.py` — обработка истории CSV; `project/excel_export.py` — экспорт; `project/blackbox_cli.py` — расчёт JSON без UI.
-- `examples/` — входные демонстрационные сценарии; `tests/` — проверки; `.github/workflows/tests.yml` — CI.
+- `examples/` — входные демонстрационные сценарии; `tests/` — локальные проверки. Автоматический тестовый workflow GitHub Actions удалён по просьбе пользователя.
 - `docs/MODEL_AND_DOMAIN.md` — ранее описанные формулы/условности; `doc/research/` — выписки из исследований; `doc/plan/` — фазы; `doc/todo.md` — оперативный steering.
 
 ## Непереговорные ограничения
@@ -34,11 +34,11 @@ python -m pip install -r requirements-dev.txt
 QT_QPA_PLATFORM=offscreen python -m pytest -q
 python -m compileall -q main.py project
 ```
-В Fedora / PyCharm запускать `python main.py`, используя venv с PySide6. Для CI проверять Python 3.11 и 3.13 и реальные журналы Actions, не делать вывод только по значку статуса.
+В Fedora / PyCharm запускать `python main.py`, используя venv с PySide6. Тесты запускать вручную через pytest; GitHub Actions для тестирования проекта отключён.
 
 ## Референсы
 - `docs/MODEL_AND_DOMAIN.md` — внутренняя предметная модель.
-- [PySide6 / Qt for Python](https://doc.qt.io/qtforpython-6/), [Matplotlib embedding in Qt](https://matplotlib.org/stable/gallery/user_interfaces/embedding_in_qt_sgskip.html), [XlsxWriter docs](https://xlsxwriter.readthedocs.io/), [pytest good practices](https://docs.pytest.org/en/stable/explanation/goodpractices.html), [GitHub Actions Python](https://docs.github.com/en/actions/tutorials/build-and-test-code/python).
+- [PySide6 / Qt for Python](https://doc.qt.io/qtforpython-6/), [Matplotlib embedding in Qt](https://matplotlib.org/stable/gallery/user_interfaces/embedding_in_qt_sgskip.html), [XlsxWriter docs](https://xlsxwriter.readthedocs.io/), [pytest good practices](https://docs.pytest.org/en/stable/explanation/goodpractices.html).
 - [Rivera et al., 2014, population balance in cement mill](https://doi.org/10.17230/ingciencia.10.19.8); [steel ball recharge/consumption, 2022](https://doi.org/10.1080/02726351.2022.2029648); [Bürger et al., 2018, ball wear](https://doi.org/10.1016/j.mineng.2018.09.004); [Bond Wi estimation with PBM, 2023](https://doi.org/10.1016/j.mineng.2023.108186).
 Подробные ограничения переносимости исследований — в `doc/research/`.
 
@@ -50,3 +50,7 @@ python -m compileall -q main.py project
 - При подборе сравнивать исходную траекторию с результатом операции при том же входе, учитывать оба направления (догрузка/выгрузка), заполнение камеры, все заданные диапазоны качества и нижний порог Q. Не выдавать найденный по одной фракции локальный план за доказанный глобальный оптимум. Выгрузку не кодировать как отрицательную догрузку.
 - На каждый запрос вести накопительное описание исполненных изменений в `CHANGELOG.production.md` и обновлять `doc/plan/`, `doc/research/`, `doc/todo.md`; не коммитить `AGENTS.local.md`, `*.bak`, локальные бэкапы и заводские конфиденциальные данные. Коммиты — только по прямой команде пользователя.
 - Проверки: `tests/test_production_update.py`, `tests/test_shift_simulation.py`, все старые модельные/Qt/экспортные тесты, проверка UI в `QT_QPA_PLATFORM=offscreen`. Полная проверка на установленном PySide6 и калибровка по цеховым данным остаются открытыми задачами.
+
+## Политика проверок (08.11.2026)
+- По прямому запросу пользователя удалён `.github/workflows/tests.yml`: больше не запускать автоматический pytest при push или pull request.
+- Сохранить исходники тестов в `tests/`, `pytest.ini` и `requirements-dev.txt` для добровольного локального запуска. Не восстанавливать workflow без отдельной команды пользователя.

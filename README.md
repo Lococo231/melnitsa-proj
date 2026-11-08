@@ -15,7 +15,7 @@ python3 -m venv .venv
 
 В PyCharm выберите `.venv/bin/python` в качестве интерпретатора и запускайте **`main.py`** кнопкой Run. Если ранее использовалось существующее `.venv`, достаточно обновить зависимости: `.venv/bin/python -m pip install -r requirements.txt`. Отдельно устанавливать `python3-tkinter` не требуется.
 
-При проблемах с Qt в Fedora проверьте системные зависимости графической среды и наличие пакетов `xcb`; запускать приложение нужно в графическом сеансе. Для тестов в CI используется `QT_QPA_PLATFORM=offscreen`.
+При проблемах с Qt в Fedora проверьте системные зависимости графической среды и наличие пакетов `xcb`; запускать приложение нужно в графическом сеансе. Для ручного запуска Qt-тестов без экрана можно использовать `QT_QPA_PLATFORM=offscreen`.
 
 ## Возможности
 
@@ -61,12 +61,14 @@ requirements.txt
 requirements-dev.txt
 ```
 
-## Проверка
+## Локальная проверка (без GitHub Actions)
 
 ```bash
 .venv/bin/python -m pip install -r requirements-dev.txt
 QT_QPA_PLATFORM=offscreen .venv/bin/python -m pytest -q
 ```
+
+**Автоматические тесты при отправке изменений в GitHub отключены.** Каталог `tests/`, `pytest.ini` и `requirements-dev.txt` сохранены для ручных проверок. Workflow `.github/workflows/tests.yml` удалён.
 
 Импортируйте конфигурацию из `examples/` через меню **Файл → Импорт параметров JSON**. Файлы `model.py` и `blackbox_cli.py` сохранены для машинного вызова Black Box без интерфейса.
 
