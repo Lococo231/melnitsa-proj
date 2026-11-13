@@ -91,3 +91,9 @@ python -m compileall -q main.py project
 - Для Windows `build_windows.cmd` запускает `scripts/build_windows.ps1` (PyInstaller OneFile/OneDir). Вход `main.py` вызывает `freeze_support()` до импорта qt_app; не нарушать это для `ProcessPoolExecutor(spawn)`.
 - Собрать EXE на Windows и проверить в отсутствии Python на другой машине. Не коммитить бинарники, dist/, build/, .venv и AGENTS.local.md. Автоматические тесты GitHub Actions не включать.
 - Исследование: `doc/research/07-windows-exe-packaging.md`; план: `doc/plan/15-standalone-windows-exe.md`.
+
+## Совместимость Windows PowerShell 5.1 (14.11.2026)
+
+- Файлы `scripts/build_windows.ps1` и `build_windows.cmd` должны оставаться строго ASCII (без кириллицы и не-ASCII пунктуации): Windows PowerShell 5.1 может неправильно интерпретировать UTF-8 без BOM.
+- Для пояснений пользователю использовать README и документацию в UTF-8; избегать не-ASCII строк в скриптах запуска.
+- При изменениях проверять `python -m pytest -q tests/test_build_script_encoding.py`; для реальной проверки обязательно запускать OneFile/OneDir на Windows, а не только статические тесты. Не восстанавливать GitHub Actions.

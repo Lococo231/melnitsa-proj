@@ -106,3 +106,10 @@
 - Исправлен выборочный экспорт результата: источник — QLabel, а не QTableWidget. Экспорт в Excel переведён на уже установленный XlsxWriter, без лишней зависимости openpyxl; текст защищён от интерпретации как формулы.
 - Добавлены `build_windows.cmd`, `scripts/build_windows.ps1` и `requirements-build.txt`: сборка PyInstaller OneFile/OneDir. В сборке используются пути импорта project/, данные Matplotlib, Windows Qt-плагины и поддержка multiprocessing.
 - Добавлены локальные регрессионные тесты JSON/XLSX, статические проверки точки входа и документация исследования упаковки. Windows EXE в Linux не собирался; GUI на Windows пока не проверен. GitHub Actions выключен.
+
+## 14.11.2026 — исправление Windows PowerShell 5.1 ParserError
+
+- Полностью заменены `scripts/build_windows.ps1` и `build_windows.cmd` ASCII-версиями: исключены испорченные кириллические строки, из-за которых PowerShell выдавал UnexpectedToken и сообщения о незакрытых скобках.
+- Сохранены OneFile/OneDir, консольный режим диагностики, установка зависимостей, проверка кода завершения и поиск выходного EXE.
+- Добавлен `tests/test_build_script_encoding.py` для локального контроля кодировки и основных параметров; 2 теста прошли.
+- Windows-сборка фактического EXE ещё не выполнялась; GitHub Actions не включён.

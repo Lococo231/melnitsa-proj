@@ -4,10 +4,10 @@ cd /d "%~dp0"
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\build_windows.ps1" -Mode OneFile
 if errorlevel 1 (
   echo.
-  echo Sborка ne udalas. Prover'te soobshcheniya vyshe.
+  echo Build failed. Read the error messages above.
   pause
   exit /b 1
 )
 echo.
-echo Gotovo: dist\CementMill.exe
+echo Build complete: dist\CementMill.exe
 pause

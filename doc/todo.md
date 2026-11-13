@@ -82,3 +82,10 @@
 - [ ] В случае проблем собрать OneDir/Console и проверить Qt платформенные плагины и Matplotlib; сравнить pyside6-deploy/Nuitka.
 - [ ] Протестировать EXE на другом Windows ПК (x64, высокое DPI). Подписать код, если потребуется для массовой раздачи.
 - [ ] Выполнять локальные тесты `tests/test_operator_export.py` и `tests/test_windows_build_layout.py`; GitHub Actions не возвращать.
+
+## Проверка исправления сборки Windows (14.11.2026)
+
+- [ ] В Windows/PyCharm после `git pull` запустить `.\build_windows.cmd` и убедиться, что исчезли ошибки ParserError и программа собрана.
+- [ ] Если OneFile не запускается, собрать `-Mode OneDir -Console`, посмотреть сообщения о DLL, Qt-плагинах и multiprocessing.
+- [ ] Проверить `dist\CementMill.exe` на другом компьютере без Python, включая расчёт несколькими процессами и экспорт Excel.
+- [ ] При изменении скриптов выполнять локально `tests/test_build_script_encoding.py`; GitHub Actions не включать.

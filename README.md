@@ -179,3 +179,9 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\build_windows.ps1 
 Результат: `dist/CementMill/` — всю папку можно передать одним ZIP. Собирать под Windows; в Linux нельзя получить достоверно проверенный Windows EXE. При запуске `onefile` распаковывается во временный каталог (первый старт дольше). **Сборка на Windows и проверка на другом ПК ещё не выполнены.**
 
 Вторая альтернатива от Qt — `pyside6-deploy --mode onefile main.py` (Nuitka). Подробности и источники: `doc/research/07-windows-exe-packaging.md`, план `doc/plan/15-standalone-windows-exe.md`. Локальные тесты экспорта: `python -m pytest -q tests/test_operator_export.py tests/test_windows_build_layout.py`. GitHub Actions отключён.
+
+### Windows PowerShell 5.1: ошибка ParserError при сборке (14.11.2026)
+
+Скрипты `scripts/build_windows.ps1` и `build_windows.cmd` теперь содержат **только ASCII-символы**: это устраняет повреждение русских строк при чтении UTF-8 без BOM в Windows PowerShell 5.1. После `git pull origin main` запустите `.\build_windows.cmd`. Для диагностики доступна сборка папки: `powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\build_windows.ps1 -Mode OneDir -Console`.
+
+Новый локальный тест: `python -m pytest -q tests/test_build_script_encoding.py`. Он проверяет ASCII и ключевые режимы скрипта, но **не заменяет реальную сборку и запуск EXE под Windows**. GitHub Actions остаётся отключён.
