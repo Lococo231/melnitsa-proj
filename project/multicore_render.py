@@ -21,7 +21,13 @@ def _part_png(job):
     from matplotlib.figure import Figure
     from matplotlib.backends.backend_agg import FigureCanvasAgg
 
-    fig = Figure(figsize=(10.8, 2.20), dpi=110, facecolor='#162a3d')
+    # Use two physical pixels per display pixel for sharp curves/text.
+    # With target_size the image aspect follows the *current Qt pane*.
+    pixel_w, pixel_h = job.get('render_px', (1920, 540))
+    pixel_w = max(620, min(6400, int(pixel_w)))
+    pixel_h = max(270, min(3600, int(pixel_h)))
+    dpi = 170
+    fig = Figure(figsize=(pixel_w/dpi, pixel_h/dpi), dpi=dpi, facecolor='#162a3d')
     FigureCanvasAgg(fig)
     ax = fig.add_axes([.22 if job.get('category_labels') else .105,
                        .22, .565 if job.get('category_labels') else
@@ -72,7 +78,7 @@ def _part_png(job):
         ax.legend(fontsize=7,loc='upper center',bbox_to_anchor=(.5,1.27),ncol=3,
                   frameon=False,labelcolor='#ebf5fc')
     buf=io.BytesIO()
-    fig.savefig(buf,format='png',dpi=110,facecolor=fig.get_facecolor())
+    fig.savefig(buf,format='png',dpi=dpi,facecolor=fig.get_facecolor())
     return job['id'],buf.getvalue()
 
 
@@ -172,7 +178,8 @@ def _jobs_for_result(result):
 
 
 def render_timeline_images(result:dict, max_workers:int|None=None,
-                           enabled:bool=True, groups:tuple[str,...]|None=None):
+                           enabled:bool=True, groups:tuple[str,...]|None=None,
+                           target_size:tuple[int,int]|None=None):
     """Рендерить каждую независимую панель на ядре, передать в UI только bytes.
 
     Python Qt-функции здесь отсутствуют. Если spawn недоступен — последовательный
@@ -181,6 +188,16 @@ def render_timeline_images(result:dict, max_workers:int|None=None,
     jobs = _jobs_for_result(result)
     if groups is not None:
         jobs = [j for j in jobs if any(j['id'].startswith(g) for g in groups)]
+    if target_size is not None:
+        # ALL Matplotlib Agg figures must match the actual visible Qt viewport:
+        # simulation, fraction wear, event history and forecast. The PNG has
+        # twice the logical pixels, avoiding blurry upscaling on HiDPI screens.
+        pane_width, pane_height = target_size
+        if pane_width <= 0 or pane_height <= 0:
+            raise ValueError('Размер графика должен быть положительным')
+        render_size = (2 * int(pane_width), 2 * int(pane_height))
+        for job in jobs:
+            job['render_px'] = render_size
     if not jobs:
         return {},1,None
     cpu = os.cpu_count() or 1

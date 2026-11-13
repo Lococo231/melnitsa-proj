@@ -142,7 +142,7 @@ class AdaptiveTabs(QWidget):
     def resizeEvent(self, event):
         super().resizeEvent(event)
         bar = self.tabs.tabBar()
-        required = sum(bar.tabSizeHint(i).width() for i in range(bar.count())) + 25
+        required = sum(bar.tabSizeHint(i).width() for i in range(bar.count()) if self.tabs.isTabVisible(i)) + 25
         compact = self.width() < required
         bar.setVisible(not compact)
         self.picker.setVisible(compact)
@@ -1107,6 +1107,12 @@ from multicore_ui import install as install_multicore_ui
 install_multicore_ui(MillWindow)
 from workspace_ui import install as install_workspace_ui
 install_workspace_ui(MillWindow)
+from staged_results_ui import install as install_staged_results_ui
+install_staged_results_ui(MillWindow)
+from responsive_ui import install as install_responsive_ui
+install_responsive_ui(MillWindow)
+from adaptive_graphs_ui import install as install_adaptive_graphs_ui
+install_adaptive_graphs_ui(MillWindow)
 
 def main():
     app = QApplication.instance() or QApplication(sys.argv)
