@@ -140,3 +140,7 @@ py -3.11 -m pytest -q tests/test_multicore_combinations.py tests/test_multicore_
 ```
 
 Исследования: `doc/research/04-formula-audit.md`, `doc/research/05-qt-workspace-practices.md`. Планы: `doc/plan/08-performance.md`, `09-multicore-combinations.md`, `10-operator-workspace.md`.
+
+### Исправление запуска PySide6 (13.11.2026)
+
+В `workspace_ui` исправлена последовательность создания вкладок: сигналы `currentChanged` игнорируются до завершения сборки, а layout симуляции извлекается из `QScrollArea.widget()`. Это устраняет причины ошибок `AttributeError: timeline_editor_index` и `AttributeError: 'NoneType' object has no attribute 'indexOf'`, замеченных при запуске на Windows. Локальная проверка: `python -m pytest -q tests/test_workspace_startup.py`. Полный GUI-запуск на Windows требует проверки после обновления.

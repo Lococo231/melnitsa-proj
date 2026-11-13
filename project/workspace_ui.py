@@ -204,6 +204,9 @@ def install(MillWindow):
     timeline_ui._timeline_sim_plot=_one_sim_chart
 
     def build(self):
+        # Nested tab widgets emit currentChanged before all workspace fields exist.
+        # Suppress those premature callbacks until the composite UI is ready.
+        self._workspace_ui_built = False
         original_build(self)
         self._workspace_cursor_updating=False
         self._workspace_ready=False
@@ -275,7 +278,13 @@ def install(MillWindow):
                 self.file_menu.removeAction(action)
         # 3) Simulation: a single selectable graph instead of a 4-plot wall.
         sim_page=self.right.tabs.widget(self.sim_tab_index)
-        sim_layout=sim_page.layout()
+        # The simulation tab is a QScrollArea. Its layout belongs to its
+        # content QWidget, not to the QScrollArea itself.
+        sim_content = (sim_page.widget() if isinstance(sim_page, QScrollArea)
+                       else sim_page)
+        sim_layout = sim_content.layout() if sim_content is not None else None
+        if sim_layout is None or sim_layout.indexOf(self.sim_plot) < 0:
+            raise RuntimeError('Не найдена компоновка графиков симуляции работы')
         self.sim_plot.setMinimumHeight(330)
         self.sim_plot.setMaximumHeight(610)
         choice=QHBoxLayout()
@@ -397,6 +406,7 @@ def install(MillWindow):
                 lambda hour,panel=panel:self._workspace_sync_hour(panel,hour))
         self.right.tabs.currentChanged.connect(
             lambda _index:self._workspace_on_tab_changed())
+        self._workspace_ui_built = True
         self.right.tabs.setCurrentIndex(self.sim_tab_index)
 
     def change_chart(self):
@@ -452,6 +462,10 @@ def install(MillWindow):
             _one_sim_chart(self,result)
 
     def render_active(self):
+        # During original_build(), production_ui currentChanged signals can fire
+        # before timeline_editor_index and journal widgets have been created.
+        if not getattr(self, '_workspace_ui_built', False):
+            return
         index=self.right.tabs.currentIndex()
         result=getattr(self,'_timeline_outcome',None)
         ready=result is not None and not getattr(self,'_sim_dirty',True)
