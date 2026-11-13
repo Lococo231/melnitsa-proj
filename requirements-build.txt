@@ -1,0 +1,2 @@
+# Development-only packaging tool; not installed on recipients' PCs.
+pyinstaller>=6.15,<7

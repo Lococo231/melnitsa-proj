@@ -1113,6 +1113,8 @@ from responsive_ui import install as install_responsive_ui
 install_responsive_ui(MillWindow)
 from adaptive_graphs_ui import install as install_adaptive_graphs_ui
 install_adaptive_graphs_ui(MillWindow)
+from operator_workflow_ui import install as install_operator_workflow_ui
+install_operator_workflow_ui(MillWindow)
 
 def main():
     app = QApplication.instance() or QApplication(sys.argv)

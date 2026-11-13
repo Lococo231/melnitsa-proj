@@ -159,3 +159,23 @@ py -3.11 -m pytest -q tests/test_multicore_combinations.py tests/test_multicore_
 Локальная проверка: `python -m pytest -q tests/test_staged_installer.py tests/test_responsive_installer.py tests/test_all_graphs_installer.py tests/test_all_graph_resolutions.py tests/test_responsive_renderer.py`. Qt-проверки: `tests/test_staged_results_qt.py`, `tests/test_responsive_qt.py`, `tests/test_all_graphs_qt.py`, при установленном PySide6. **Полный запуск Windows/HiDPI ещё требуется проверить вручную.** GitHub Actions не включён.
 
 Документы: `doc/plan/11-grouped-results.md`, `doc/plan/12-responsive-layout.md`, `doc/plan/13-all-graphs-adaptive-resolution.md`, `doc/research/06-qt-responsive-diagnostics.md`.
+
+## Рабочий сценарий оператора и сборка Windows EXE (14.11.2026)
+
+**Рабочий интерфейс.** Убраны большие поясняющие карточки над исходными данными и результатами; вложенные вкладки называются без номеров. В верхнем меню доступны **«Как работает?»** с текстовой справкой и двумя схематическими анимациями поперечного/продольного разреза, а также **«Экспорт»** с выбором галочками таблиц, текущей конфигурации и журнала симуляций (JSON/XLSX). «Симуляция работы» содержит список выполненных запусков: номер, марку, длительность, время и открываемый снимок входных параметров. На графике последующие запуски располагаются на одной шкале часов.
+
+**Важно об ограничении модели:** пока отрезки соединяются **по времени**. Изношенное состояние отдельных когорт тел ещё не передаётся физически в новый расчёт, поэтому стык значений массы/износа может быть разрывным; это отдельная открытая задача. История доступна во время работы программы и через выборочный экспорт. Не представлять графическую склейку за заводски валидированную непрерывную модель.
+
+**Сборка единого Windows EXE:** на Windows с Python 3.11 x64 дважды запустите `build_windows.cmd` из корня проекта либо выполните в PowerShell:
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\build_windows.ps1 -Mode OneFile
+```
+Результат: `dist/CementMill.exe`. Передавать пользователю **только этот EXE**; Python и папку репозитория передавать не нужно. Сборка использует PyInstaller, PySide6, Matplotlib, XlsxWriter и `freeze_support()` для рабочих процессов.
+
+Для диагностики сборки, когда EXE не запускается:
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\build_windows.ps1 -Mode OneDir -Console
+```
+Результат: `dist/CementMill/` — всю папку можно передать одним ZIP. Собирать под Windows; в Linux нельзя получить достоверно проверенный Windows EXE. При запуске `onefile` распаковывается во временный каталог (первый старт дольше). **Сборка на Windows и проверка на другом ПК ещё не выполнены.**
+
+Вторая альтернатива от Qt — `pyside6-deploy --mode onefile main.py` (Nuitka). Подробности и источники: `doc/research/07-windows-exe-packaging.md`, план `doc/plan/15-standalone-windows-exe.md`. Локальные тесты экспорта: `python -m pytest -q tests/test_operator_export.py tests/test_windows_build_layout.py`. GitHub Actions отключён.
