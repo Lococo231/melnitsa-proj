@@ -1103,6 +1103,10 @@ from workflow_ui import install as install_workflow_ui
 install_workflow_ui(MillWindow)
 from timeline_ui import install as install_timeline_ui
 install_timeline_ui(MillWindow)
+from multicore_ui import install as install_multicore_ui
+install_multicore_ui(MillWindow)
+from workspace_ui import install as install_workspace_ui
+install_workspace_ui(MillWindow)
 
 def main():
     app = QApplication.instance() or QApplication(sys.argv)

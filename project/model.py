@@ -533,14 +533,19 @@ def quality_at(cfg:dict, cohorts:list[dict], samples:int=14) -> dict:
         speed=gauss(z["rpm"]/crit,0.76,0.21)
         loading=gauss(z["fill_j"],0.30,0.20)
         attr_mass=sum(cohort_mass(c)*gauss(c["d"],22,12) for c in sub)/max(sum(cohort_mass(c) for c in sub),1e-9)
+        # Коэффициенты зависят от состояния камеры, но не от осевого шага.
+        rates = []
+        for i in range(9):
+            eff=media_impact(sub,MID[i])
+            rate=cfg["breakage_k"]*eff*speed*loading*cfg["grindability"]*(.65 if MID[i]<.63 else 1.0)
+            if MID[i]<.08:
+                rate+=cfg.get("fines_attrition_k",0.0)*attr_mass*speed*loading*cfg["grindability"]
+            rates.append(max(0.,rate))
         for j in range(steps):
             timestep=tm/steps
             for i in range(9):
-                eff=media_impact(sub,MID[i])
-                rate=cfg["breakage_k"]*eff*speed*loading*cfg["grindability"]*(.65 if MID[i]<.63 else 1.0)
-                if MID[i]<.08:
-                    rate+=cfg.get("fines_attrition_k",0.0)*attr_mass*speed*loading*cfg["grindability"]
-                br=min(comps[i],comps[i]*(1-math.exp(-max(0,rate)*timestep)))
+                rate=rates[i]
+                br=min(comps[i],comps[i]*(1-math.exp(-rate*timestep)))
                 comps[i]-=br
                 for k in range(i+1,10):comps[k]+=br*grain_dist[i][k]
             x+=z["length_m"]/steps
