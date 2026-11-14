@@ -105,3 +105,11 @@ python -m compileall -q main.py project
 - `live_preview_core.py` выполняет тяжёлые подзадачи через `ProcessPoolExecutor(spawn)`, max 4; `live_multicore_ui.py` передаёт данные через Qt-сигналы и исключает лишний оптимизационный поиск при перемещении ползунков. QtAgg/виджеты остаются в GUI-потоке.
 - `Обзор` имеет независимый горизонт; `HourPlotImage` выбирает час просмотра. Не переписывать `simulation_days` и `simulation_hours_per_day` текущей конфигурации при изменении горизонта обзора.
 - Важны `multiprocessing.freeze_support()` до загрузки Qt, регрессии Windows/PyInstaller OneFile, и отмена устаревших фоновых запросов. GitHub Actions отключён, `AGENTS.local.md` не коммитить.
+
+## Фаза 18 — анимация двухкамерной мельницы
+
+- `project/mill_dynamics.py`: независимая от Qt упрощённая 2D кинематика, `project/mill_visual_ui.py`: только Qt-отрисовка и снятие готовых состояний из фонового потока.
+- Нельзя обращаться к `collect_config()` или QWidget из `AnimationThread.run`; настройки читать в GUI-потоке и передавать рабочему потоку через защищённые данные.
+- Нельзя использовать `Qt.AlignmentFlag.TextWordWrap`: WordWrap реализуется через `QTextOption`; локальный тест `tests/test_mill_visual_qt.py` должен отрисовать оба виджета offscreen.
+- Скрытые анимации приостанавливать; при уничтожении виджетов останавливать рабочие потоки. CPU-потоки Python не равны полноценному многоядерному DEM из-за GIL.
+- Анимация не является калиброванным моделированием измельчения и не должна изменять технологические формулы без измерений. Не коммитить `AGENTS.local.md`, `*.bak`, `__pycache__`; GitHub Actions не восстанавливать.

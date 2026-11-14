@@ -197,3 +197,11 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\build_windows.ps1 
 Компоненты: `project/mill_dynamics.py`, `project/mill_visual_ui.py`, `project/live_preview_core.py`, `project/live_multicore_ui.py`. Документы: `doc/plan/16-live-preview-and-drum-motion.md`, `doc/research/08-drum-motion-reference.md`. Анимация сравнивалась с сохранённой веб-версией `references/1233223_fixed_norm.html`.
 
 Локальные проверки: `python -m pytest -q tests/test_mill_dynamics.py tests/test_live_preview_core.py tests/test_visual_installer.py`; Qt-интеграция: `tests/test_live_multicore_qt.py` при установленном PySide6. Полный запуск на Windows и фактическое ускорение ещё требуют проверки.
+
+## Фаза 18 — исправление анимации разрезов мельницы (14.11.2026)
+
+- Исправлено исключение `AttributeError: TextWordWrap` в `project/mill_visual_ui.py`: QPainter использует `QTextOption.WrapMode.WordWrap` вместо несуществующего `Qt.AlignmentFlag.TextWordWrap`.
+- Продольный разрез переделан: подача клинкера, первая камера грубого помола с более крупными шарами, диафрагма, вторая камера тонкого помола с мелкими телами, движение материала и выход цемента. Поперечный разрез показывает условное движение и контакты мелющих тел.
+- Состояния двух анимаций вычисляются в отдельных **Python-потоках**, Qt рисует только готовые снимки. Сбор параметров Qt выполняется в GUI-потоке, скрытые анимации приостанавливаются. **Потоки Python не гарантируют загрузку нескольких процессорных ядер одновременно из-за GIL; это не многопроцессный DEM.** Движение носит иллюстративный характер и не используется в расчёте качества/износа.
+- Локальные тесты: `python -m pytest -q tests/test_mill_dynamics_animation.py tests/test_mill_visual_qt.py`. Полный Windows/PySide6 запуск ещё нужно подтвердить.
+- Исследование: `doc/research/18-mill-animation-analysis.md`. План: `doc/plan/18-mill-animation-redesign.md`. Применение поверх предыдущих версий: `apply_animation_redesign.py`. GitHub Actions остаётся отключён.
