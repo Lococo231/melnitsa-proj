@@ -294,7 +294,8 @@ class PlotPanel(QWidget):
         preview = '  |  '.join(descriptions[:3])
         self.hour_readout.setText(f'Выбранный час: {hour:.2f}  ·  {preview}' if preview
                                   else f'Выбранный час: {hour:.2f}')
-        self.canvas.draw_idle()
+        if self.canvas.isVisible():
+            self.canvas.draw_idle()
 
     def axis(self, ax, heading, xlabel='Наработка, ч', ylabel=''):
         ax.set_facecolor(PANEL)
@@ -1117,6 +1118,8 @@ from operator_workflow_ui import install as install_operator_workflow_ui
 install_operator_workflow_ui(MillWindow)
 from live_multicore_ui import install as install_live_multicore_ui
 install_live_multicore_ui(MillWindow)
+from steady_plot_ui import install as install_steady_plot_ui
+install_steady_plot_ui(MillWindow, PlotPanel)
 
 def main():
     app = QApplication.instance() or QApplication(sys.argv)

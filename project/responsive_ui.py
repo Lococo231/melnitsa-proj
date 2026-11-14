@@ -54,9 +54,14 @@ def _patch_chart_label():
         img = QImage.fromData(data, 'PNG')
         if img.isNull():
             raise ValueError('Невозможно декодировать изображение графика')
+        if getattr(self, '_adaptive_source', None) is data:
+            self.end = max(.001, float(end))
+            self.update()
+            return
         self._adaptive_image = img
+        self._adaptive_source = data
         self.end = max(.001, float(end))
-        self.updateGeometry()
+        # PNG pixel dimensions must not trigger relayout of Qt parent widgets.
         self.update()
 
     def paint_event(self, event):
@@ -167,22 +172,18 @@ def _show_one_fraction(panel, result, group, parts):
         if not hasattr(panel, '_fraction_wait_label'):
             label = QLabel('Подготавливается диаграмма фракций…', panel)
             label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            panel.layout().insertWidget(0, label, 1)
+            panel._plot_layers.addWidget(label)
             panel._fraction_wait_label = label
         if key in failures:
             panel._fraction_wait_label.setText('Не удалось подготовить график фракций. Проверьте сообщение в строке состояния.')
         else:
             panel._fraction_wait_label.setText('Подготавливается диаграмма фракций…')
         panel._fraction_wait_label.show()
-        panel.canvas.hide()
-        if hasattr(panel, '_multicore_container'):
-            panel._multicore_container.hide()
-        if hasattr(panel, '_fraction_single_image'):
-            panel._fraction_single_image.hide()
+        panel._plot_layers.setCurrentWidget(panel._fraction_wait_label)
         return True
     if not hasattr(panel, '_fraction_single_image'):
         image = multicore_ui.HourPlotImage(panel, panel)
-        panel.layout().insertWidget(0, image, 1)
+        panel._plot_layers.addWidget(image)
         panel._fraction_single_image = image
         panel.hour_spin.valueChanged.connect(image.set_hour)
     if hasattr(panel, '_fraction_wait_label'):
@@ -193,7 +194,7 @@ def _show_one_fraction(panel, result, group, parts):
         panel._multicore_container.hide()
     panel.canvas.hide()
     image = panel._fraction_single_image
-    image.show()
+    panel._plot_layers.setCurrentWidget(image)
     image.left_fraction = .105
     image.set_image(images[key], result['hours'])
     panel.set_time_range(result['hours'])

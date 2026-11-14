@@ -146,14 +146,14 @@ def _show_png_set(panel,result,group,parts):
             image=HourPlotImage(panel,content)
             stack.addWidget(image,1)
             slots.append(image)
-        panel.layout().insertWidget(0,content,1)
+        panel._plot_layers.addWidget(content)
         panel._multicore_images = slots
         panel._multicore_container = content
         panel.hour_spin.valueChanged.connect(
             lambda h,p=panel:[label.set_hour(h) for label in p._multicore_images])
     # Если ранее отображался стандартный Matplotlib, скрываем только canvas.
     panel.canvas.hide()
-    panel._multicore_container.show()
+    panel._plot_layers.setCurrentWidget(panel._multicore_container)
     if hasattr(panel,'_pending_chart_label'):
         panel._pending_chart_label.hide()
     for i,key in enumerate(keys):
@@ -170,7 +170,8 @@ def _show_png_set(panel,result,group,parts):
 def _fallback_panel(panel,draw):
     if hasattr(panel,'_multicore_container'):
         panel._multicore_container.hide()
-        panel.canvas.show()
+    panel._plot_layers.setCurrentWidget(panel.canvas)
+    panel.canvas.show()
     draw()
 
 
@@ -273,12 +274,9 @@ def install(MillWindow):
         if not hasattr(panel,'_pending_chart_label'):
             note=QLabel('Подготавливаются графики в фоновых процессах…',panel)
             note.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            panel.layout().insertWidget(0,note,1)
+            panel._plot_layers.addWidget(note)
             panel._pending_chart_label=note
-        panel._pending_chart_label.show()
-        panel.canvas.hide()
-        if hasattr(panel,'_multicore_container'):
-            panel._multicore_container.hide()
+        panel._plot_layers.setCurrentWidget(panel._pending_chart_label)
         if window._charts_loading.get(group) != window._sim_generation:
             window._charts_loading[group] = window._sim_generation
             window._chart_pool.start(DeferredChartJob(

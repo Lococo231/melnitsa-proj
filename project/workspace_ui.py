@@ -112,7 +112,7 @@ def _one_sim_chart(window, result):
     if not hasattr(panel, '_workspace_image'):
         pane = HourPlotImage(panel, panel)
         pane.setMinimumHeight(220)
-        panel.layout().insertWidget(0, pane, 1)
+        panel._plot_layers.addWidget(pane)
         panel._workspace_image = pane
         panel.hour_spin.valueChanged.connect(pane.set_hour)
     panel.canvas.hide()
@@ -121,13 +121,12 @@ def _one_sim_chart(window, result):
     if hasattr(panel, '_pending_chart_label'):
         panel._pending_chart_label.hide()
     if key not in images:
-        panel._workspace_image.hide()
-        window._workspace_chart_hint.setText('Данные графика подготавливаются. '
-                                            'Если PNG не появился, запустите симуляцию снова.')
-        window._workspace_chart_hint.show()
+        panel._plot_placeholder.setText('Подготавливается диаграмма…')
+        panel._plot_layers.setCurrentWidget(panel._plot_placeholder)
+        window._workspace_chart_hint.hide()
     else:
         window._workspace_chart_hint.hide()
-        panel._workspace_image.show()
+        panel._plot_layers.setCurrentWidget(panel._workspace_image)
         panel._workspace_image.left_fraction = .105
         panel._workspace_image.set_image(images[key], analysis_hours(result))
     panel.set_time_range(analysis_hours(result))

@@ -73,8 +73,9 @@ class ResizeObserver(QObject):
         if event.type() in (QEvent.Type.Resize, QEvent.Type.Show):
             owner = self.owner
             if getattr(owner, '_all_graphs_ready', False):
+                # Keep one debounced layout observation; QtAgg already
+                # handles its own canvas resizeEvent in the GUI thread.
                 owner._all_graphs_resize_timer.start()
-                owner._native_graphs_resize_timer.start()
         return False
 
 
@@ -189,8 +190,29 @@ def install(MillWindow):
         if warning:
             window.statusBar().showMessage(
                 'Графики подготовлены последовательно: ' + str(warning), 10000)
-        # Show the new image only if the corresponding chart remains visible.
-        window._all_graphs_resize_timer.start()
+        # Existing result cache is already updated by multicore_ui.
+        # Show it once, without another full-window resize cycle.
+        def show_ready():
+            if generation != window._sim_generation:
+                return
+            if group.startswith('sim'):
+                if (window.right.tabs.currentIndex() == window.sim_tab_index and
+                        window._workspace_chart_picker.currentData() == group):
+                    window._render_active()
+            elif group == 'history' and window.right.tabs.currentIndex() == window.history_index:
+                window._render_active()
+            elif group == 'forecast' and window.right.tabs.currentIndex() == 6:
+                window._render_active()
+            # If the latest panel dimensions changed while the background task
+            # ran, schedule only one follow-up render after layout settles.
+            panel = (window.sim_plot if group.startswith('sim') else
+                     window.history_plot if group == 'history' else
+                     window.forecast_plot if group == 'forecast' else None)
+            if panel is not None and panel.isVisible() and changed_size(
+                    queued[1], display_size(panel, 3 if group == 'history' else
+                                              2 if group == 'forecast' else 1)):
+                window._all_graphs_resize_timer.start()
+        QTimer.singleShot(0, show_ready)
 
     def on_failed(window, generation, tag, error):
         if not tag.startswith('adaptive:'):

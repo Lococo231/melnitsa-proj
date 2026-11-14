@@ -607,9 +607,8 @@ def install(MillWindow):
         ax.set_xlim(0, max(0.01, combined['hours']))
         panel.figure.subplots_adjust(left=.085, right=.97, top=.90, bottom=.18)
         panel.set_time_range(combined['hours'])
+        panel._plot_layers.setCurrentWidget(panel.canvas)
         panel.canvas.show()
-        if hasattr(panel, '_workspace_image'):
-            panel._workspace_image.hide()
         panel.canvas.draw_idle()
         if hasattr(window, '_workspace_chart_hint'):
             window._workspace_chart_hint.hide()
