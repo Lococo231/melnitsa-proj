@@ -993,7 +993,7 @@ class MillWindow(QMainWindow):
 
     @staticmethod
     def _choose_open(parent, caption, pattern):
-        return QFileDialog.getOpenFileName(parent, caption, str(ROOT/'examples'), pattern)[0]
+        return QFileDialog.getOpenFileName(parent, caption, str(Path.home()), pattern)[0]
 
     def open_json(self):
         path = self._choose_open(self, 'Импорт JSON конфигурации', 'JSON (*.json)')
