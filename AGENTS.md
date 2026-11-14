@@ -97,3 +97,11 @@ python -m compileall -q main.py project
 - Файлы `scripts/build_windows.ps1` и `build_windows.cmd` должны оставаться строго ASCII (без кириллицы и не-ASCII пунктуации): Windows PowerShell 5.1 может неправильно интерпретировать UTF-8 без BOM.
 - Для пояснений пользователю использовать README и документацию в UTF-8; избегать не-ASCII строк в скриптах запуска.
 - При изменениях проверять `python -m pytest -q tests/test_build_script_encoding.py`; для реальной проверки обязательно запускать OneFile/OneDir на Windows, а не только статические тесты. Не восстанавливать GitHub Actions.
+
+## Фаза 16 — live preview и движение помольной загрузки (14.11.2026)
+
+- Последним подключать `live_multicore_ui.install(MillWindow)` **после** `operator_workflow_ui.install`; не изменять порядок подключаемых расширений `MillWindow`.
+- `mill_dynamics.py` содержит учебную 2D-механику движения, независимую от Qt. Визуальные столкновения/условное дробление не влияют на физическую модель износа или качество, без заводской калибровки не подставлять их в формулы.
+- `live_preview_core.py` выполняет тяжёлые подзадачи через `ProcessPoolExecutor(spawn)`, max 4; `live_multicore_ui.py` передаёт данные через Qt-сигналы и исключает лишний оптимизационный поиск при перемещении ползунков. QtAgg/виджеты остаются в GUI-потоке.
+- `Обзор` имеет независимый горизонт; `HourPlotImage` выбирает час просмотра. Не переписывать `simulation_days` и `simulation_hours_per_day` текущей конфигурации при изменении горизонта обзора.
+- Важны `multiprocessing.freeze_support()` до загрузки Qt, регрессии Windows/PyInstaller OneFile, и отмена устаревших фоновых запросов. GitHub Actions отключён, `AGENTS.local.md` не коммитить.

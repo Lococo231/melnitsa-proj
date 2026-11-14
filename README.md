@@ -185,3 +185,15 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\build_windows.ps1 
 Скрипты `scripts/build_windows.ps1` и `build_windows.cmd` теперь содержат **только ASCII-символы**: это устраняет повреждение русских строк при чтении UTF-8 без BOM в Windows PowerShell 5.1. После `git pull origin main` запустите `.\build_windows.cmd`. Для диагностики доступна сборка папки: `powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\build_windows.ps1 -Mode OneDir -Console`.
 
 Новый локальный тест: `python -m pytest -q tests/test_build_script_encoding.py`. Он проверяет ASCII и ключевые режимы скрипта, но **не заменяет реальную сборку и запуск EXE под Windows**. GitHub Actions остаётся отключён.
+
+## Фаза 16 — динамика мельницы и многоядерное обновление (14.11.2026)
+
+- Справка «Как работает?» показывает поперечную и продольную анимацию: 2D гравитация, контакты мелющих тел, вращение барабана, перемещение и условное дробление частиц клинкера. Это учебная физически мотивированная визуализация, **не промышленный DEM и не основа численного прогноза R0,08/Блейна**.
+- Скрыта пустая дублирующая таблица «Плановые выгрузки (из симуляции)». Колесо мыши не переключает графики в закрытых QComboBox, а прокручивает страницу.
+- В «Обзоре» добавлен независимый горизонт наработки, задаваемый отдельно от продолжительности симуляции. Ползунок под графиком показывает выбранный час и не меняет горизонт.
+- После изменения исходных параметров обновление модели выполняется с задержкой через ProcessPoolExecutor (spawn, до четырёх процессов) без блокировки Qt. Прототип вычисляет износ, модельное качество и рекомендации; устаревшие результаты отбрасываются. Тяжёлый комбинированный подбор остаётся за «Пуск».
+- `QtAgg` рисует виджеты только в GUI-потоке; расчётная работа распределена между процессами Python. При сбое spawn предусмотрен последовательный режим.
+
+Компоненты: `project/mill_dynamics.py`, `project/mill_visual_ui.py`, `project/live_preview_core.py`, `project/live_multicore_ui.py`. Документы: `doc/plan/16-live-preview-and-drum-motion.md`, `doc/research/08-drum-motion-reference.md`. Анимация сравнивалась с сохранённой веб-версией `references/1233223_fixed_norm.html`.
+
+Локальные проверки: `python -m pytest -q tests/test_mill_dynamics.py tests/test_live_preview_core.py tests/test_visual_installer.py`; Qt-интеграция: `tests/test_live_multicore_qt.py` при установленном PySide6. Полный запуск на Windows и фактическое ускорение ещё требуют проверки.
