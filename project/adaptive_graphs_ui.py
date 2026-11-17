@@ -79,8 +79,10 @@ class ResizeObserver(QObject):
         return False
 
 
-def _result(window):
+def _result(window, group=None):
     result = getattr(window, '_timeline_outcome', None)
+    if group == 'history':
+        result = getattr(window, '_session_history_result', None) or result
     if (result is None or getattr(window, '_sim_dirty', True)
             or not getattr(window, '_workspace_ui_built', False)):
         return None
@@ -151,7 +153,7 @@ def install(MillWindow):
         if outer == window.sim_tab_index and window.sim_plot.isVisible():
             sim_chart(window, result)
         elif outer == window.history_index and window.history_plot.isVisible():
-            show_png(window.history_plot, result, 'history', 3)
+            show_png(window.history_plot, _result(window, 'history'), 'history', 3)
         elif outer == 2 and window.fraction_plot.isVisible():
             stages = getattr(window, '_media_stages', None)
             if stages is None or stages.currentIndex() == 1:
@@ -175,11 +177,13 @@ def install(MillWindow):
         if not tag.startswith('adaptive:'):
             return
         group = tag[len('adaptive:'):]
-        queued = window._all_graphs_pending.pop(group, None)
-        if queued is None or generation != window._sim_generation:
+        queued = window._all_graphs_pending.get(group)
+        if (queued is None or queued[0] != generation
+                or generation != window._sim_generation):
             return
+        window._all_graphs_pending.pop(group)
         images, _workers, warning = data
-        result = _result(window)
+        result = _result(window, group)
         if result is None:
             return
         if not images:
@@ -218,7 +222,10 @@ def install(MillWindow):
         if not tag.startswith('adaptive:'):
             return
         group = tag[len('adaptive:'):]
-        window._all_graphs_pending.pop(group, None)
+        queued = window._all_graphs_pending.get(group)
+        if queued is None or queued[0] != generation:
+            return
+        window._all_graphs_pending.pop(group)
         if generation == window._sim_generation:
             window.statusBar().showMessage(
                 'Невозможно обновить разрешение графика: ' + error, 12000)

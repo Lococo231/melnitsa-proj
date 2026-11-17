@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 import math
+import threading
 from PySide6.QtCore import (QObject, QEvent, QTimer, QThreadPool, QRunnable,
                             Signal, Slot, Qt, QSignalBlocker)
 from PySide6.QtWidgets import (QComboBox, QDoubleSpinBox, QFormLayout,
@@ -26,6 +27,37 @@ class _Signals(QObject):
     failed=Signal(int,str,str)
 
 
+class _SignalGate:
+    """Mute worker emissions before QApplication can destroy Qt signal owners."""
+    def __init__(self, signal, closed):
+        self.signal = signal
+        self.closed = closed
+
+    def connect(self, *args, **kwargs):
+        return self.signal.connect(*args, **kwargs)
+
+    def emit(self, *args):
+        if self.closed.is_set():
+            return
+        try:
+            self.signal.emit(*args)
+        except RuntimeError:
+            # aboutToQuit may race a worker which passed the first check.
+            if not self.closed.is_set():
+                raise
+
+
+class _WorkerSignals:
+    def __init__(self, source, names):
+        self.source = source
+        self.closed = threading.Event()
+        for name in names:
+            setattr(self, name, _SignalGate(getattr(source, name), self.closed))
+
+    def close(self):
+        self.closed.set()
+
+
 class _Task(QRunnable):
     def __init__(self,signals,version,kind,cfg,hours=0.):
         super().__init__()
@@ -36,6 +68,8 @@ class _Task(QRunnable):
         self.hours=hours
 
     def run(self):
+        if self.signals.closed.is_set():
+            return
         try:
             if self.kind=='overview':
                 value=live_preview_core.calculate_overview(
@@ -71,7 +105,8 @@ class PreviewController(QObject):
     def __init__(self,window):
         super().__init__(window)
         self.window=window
-        self.signal=_Signals()
+        self.signal=_WorkerSignals(_Signals(self), ('ready', 'failed'))
+        self.closed=False
         self.signal.ready.connect(self._ready,Qt.ConnectionType.QueuedConnection)
         self.signal.failed.connect(self._failed,Qt.ConnectionType.QueuedConnection)
         self.pool=QThreadPool(window)
@@ -90,6 +125,8 @@ class PreviewController(QObject):
         self.last_cfg=None
 
     def mark(self):
+        if self.closed:
+            return
         self.version+=1
         self.window._overview_cached=None
         self.window._overview_cached_version=-1
@@ -102,7 +139,7 @@ class PreviewController(QObject):
 
     def submit(self,kind):
         w=self.window
-        if w._loading:
+        if self.closed or w._loading:
             return
         try:
             cfg=deepcopy(w.collect_config())
@@ -117,6 +154,8 @@ class PreviewController(QObject):
         self._dispatch(kind)
 
     def _dispatch(self,kind):
+        if self.closed:
+            return
         item=self.latest[kind]
         if item is None:
             return
@@ -130,6 +169,8 @@ class PreviewController(QObject):
 
     @Slot(int,str,object)
     def _ready(self,version,kind,value):
+        if self.closed:
+            return
         self.running[kind]=False
         w=self.window
         if version==self.version and not (kind=='overview' and
@@ -161,12 +202,102 @@ class PreviewController(QObject):
 
     @Slot(int,str,str)
     def _failed(self,version,kind,error):
+        if self.closed:
+            return
         self.running[kind]=False
         if version==self.version:
             self.window.statusBar().showMessage(
                 f'Ошибка пересчёта {kind}: {error}',12000)
         if self.latest[kind] is not None:
             self._dispatch(kind)
+
+
+    def shutdown(self):
+        self.closed=True
+        self.timer.stop()
+        self.overview_timer.stop()
+        self.latest={'preview':None,'overview':None}
+        self.signal.close()
+        self.pool.clear()
+
+
+class _ShutdownController(QObject):
+    """Drain active workers asynchronously while their window/signal owners live.
+
+    Running model/optimizer calls have no force-cancellation contract. Closing
+    therefore waits for those calls without blocking Qt's event loop.
+    """
+    def __init__(self, window):
+        super().__init__(window)
+        self.window=window
+        self.started=False
+        self.drained=False
+        self.timer=QTimer(self)
+        self.timer.setInterval(100)
+        self.timer.timeout.connect(self._poll)
+        from PySide6.QtWidgets import QApplication
+        app=QApplication.instance()
+        if app is not None:
+            app.aboutToQuit.connect(self._about_to_quit)
+
+    def _begin(self):
+        if self.started:
+            return
+        self.started=True
+        w=self.window
+        w._shutting_down=True
+        w._sim_generation+=1  # Ignore already-queued results from this session.
+        for timer in w.findChildren(QTimer):
+            timer.stop()
+        w._live_controller.shutdown()
+        w._sim_signals.close()
+        for pool in self._pools():
+            pool.clear()
+        for animation in w.findChildren(mill_visual_ui.MillCutWidget):
+            animation.shutdown()
+        if w.centralWidget() is not None:
+            w.centralWidget().setEnabled(False)
+        w.menuBar().setEnabled(False)
+        w.statusBar().showMessage('Завершение фоновых задач перед закрытием…')
+
+    def _pools(self):
+        w=self.window
+        return [pool for pool in (w._live_controller.pool,
+                getattr(w,'_sim_pool',None), getattr(w,'_chart_pool',None))
+                if pool is not None]
+
+    def _idle(self):
+        return (all(pool.activeThreadCount()==0 for pool in self._pools()) and
+                all(not widget._worker.is_alive() for widget in
+                    self.window.findChildren(mill_visual_ui.MillCutWidget)))
+
+    def request_close(self):
+        if self.drained:
+            return True
+        self._begin()
+        if self._idle():
+            self._finish()
+            return True
+        self.timer.start()
+        return False
+
+    def _finish(self):
+        self.drained=True
+        self.timer.stop()
+        # No live preview task can submit to the shared process pool now.
+        live_preview_core.shutdown()
+
+    def _poll(self):
+        if self._idle():
+            self._finish()
+            self.window.close()
+
+    def _about_to_quit(self):
+        # Direct QApplication.quit() bypasses QWidget.closeEvent. Muting all
+        # worker signal gates also makes that teardown path safe.
+        self._begin()
+        self.timer.stop()
+        live_preview_core.shutdown()
 
 
 def install(MillWindow):
@@ -176,6 +307,7 @@ def install(MillWindow):
     original_build=MillWindow._build
     original_schedule=MillWindow.schedule
     previous_calculate=MillWindow.calculate
+    previous_close=MillWindow.closeEvent
     previous_plot=workspace_ui._overview_plot
 
     def plot_overview(window,result):
@@ -236,6 +368,10 @@ def install(MillWindow):
         if app:
             app.installEventFilter(window._wheel_guard)
         window._live_controller=PreviewController(window)
+        window._sim_signals=_WorkerSignals(window._sim_signals,
+            ('completed','failed','progress','charts_ready','charts_failed'))
+        window._shutting_down=False
+        window._shutdown_controller=_ShutdownController(window)
         window.overview_hours.valueChanged.connect(
             lambda *_:window._live_controller.overview_timer.start())
         # Old auto timer may have been set to 130ms. New calculate()
@@ -246,6 +382,8 @@ def install(MillWindow):
         window._live_controller.mark()
 
     def schedule(window,*args):
+        if getattr(window,'_shutting_down',False):
+            return
         if not getattr(window,'_live_controller',None):
             return original_schedule(window,*args)
         if getattr(window,'_loading',False):
@@ -259,6 +397,7 @@ def install(MillWindow):
         if hasattr(window,'_sim_generation'):
             window._sim_generation+=1
             window._sim_dirty=True
+            window._sim_running=False
             if hasattr(window,'sim_apply'):
                 window.sim_apply.setEnabled(False)
         if hasattr(window,'_workspace_ready'):
@@ -269,11 +408,14 @@ def install(MillWindow):
             window._all_graphs_pending.clear()
         if hasattr(window,'_workspace_recommendation_apply'):
             window._workspace_recommendation_apply.setEnabled(False)
+        workspace_ui.invalidate_recommendations(window)
         window._live_controller.mark()
         window.statusBar().showMessage(
             'Изменены параметры — рассчитываю графики по нескольким ядрам…')
 
     def calculate(window,quiet=False):
+        if getattr(window,'_shutting_down',False):
+            return
         if not getattr(window,'_live_controller',None):
             return previous_calculate(window,quiet)
         if window._loading:
@@ -283,6 +425,14 @@ def install(MillWindow):
         window._live_controller.submit('preview')
         window._live_controller.overview_timer.start()
 
+    def close(window,event):
+        controller=getattr(window,'_shutdown_controller',None)
+        if controller is not None and not controller.request_close():
+            event.ignore()
+            return
+        previous_close(window,event)
+
     MillWindow._build=build
     MillWindow.schedule=schedule
     MillWindow.calculate=calculate
+    MillWindow.closeEvent=close

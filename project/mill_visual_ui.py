@@ -69,6 +69,7 @@ class AnimationThread(threading.Thread):
         self._lock = threading.Lock()
         self._stop_event = threading.Event()
         self._paused = threading.Event()
+        self._paused.set()  # A never-shown help tab must not run physics.
         self._params = current_parameters()
         self._snapshot = Snapshot(mode, {})
         self._build_models()
@@ -87,9 +88,10 @@ class AnimationThread(threading.Thread):
         for item in params.get('media', []):
             if int(item.get('chamber', 1)) == self.chamber:
                 media.append(float(item.get('diameter_mm', 50.0)))
-        self.drum = DrumCharge(rpm=self.rpm, diameter_m=self.diameter,
+        self.drum = (DrumCharge(rpm=self.rpm, diameter_m=self.diameter,
                                chamber=self.chamber, sizes_mm=media)
-        self.axial = AxialTransport(lengths)
+                     if self.mode == 'cross' else None)
+        self.axial = AxialTransport(lengths) if self.mode != 'cross' else None
 
     def set_chamber(self, chamber: int) -> None:
         with self._lock:
@@ -103,8 +105,9 @@ class AnimationThread(threading.Thread):
             # Update only speed/feed-sensitive values to avoid jarring resets.
             try:
                 self.rpm = float(self._params['mills'][0].get('rpm', self.rpm))
-                self.drum.rpm = self.rpm
-                self.drum.omega = 2 * math.pi * self.rpm / 60.0
+                if self.drum is not None:
+                    self.drum.rpm = self.rpm
+                    self.drum.omega = 2 * math.pi * self.rpm / 60.0
             except Exception:
                 pass
 
@@ -118,15 +121,17 @@ class AnimationThread(threading.Thread):
         else:
             self._paused.clear()
 
-    def stop(self) -> None:
+    def stop(self, join_timeout: float = 0.0) -> None:
         self._stop_event.set()
+        if join_timeout > 0 and self.is_alive() and threading.current_thread() is not self:
+            self.join(timeout=join_timeout)
 
     def run(self) -> None:
         interval = 1.0 / self.fps
         previous = time.perf_counter()
         while not self._stop_event.is_set():
             if self._paused.is_set():
-                time.sleep(0.03)
+                self._stop_event.wait(0.03)
                 previous = time.perf_counter()
                 continue
             now = time.perf_counter()
@@ -136,9 +141,8 @@ class AnimationThread(threading.Thread):
                 # A worker must never read Qt widgets via collect_config().
                 # The GUI thread refreshes immutable scalar settings on show/change.
                 feed = float(self._params.get('fresh_feed_tph', 72.0))
-                self.drum.step(dt)
-                self.axial.step(dt, feed)
                 if self.mode == 'cross':
+                    self.drum.step(dt)
                     self._snapshot = Snapshot('cross', {
                         'rpm': self.rpm,
                         'critical': self.drum.critical_rpm,
@@ -150,6 +154,7 @@ class AnimationThread(threading.Thread):
                         'grains': [(g.x, g.y, g.r, g.grade) for g in self.drum.grains],
                     })
                 else:
+                    self.axial.step(dt, feed)
                     layout = self.axial.media_layout()
                     self._snapshot = Snapshot('length', {
                         'discharge': self.axial.discharge,
@@ -161,7 +166,7 @@ class AnimationThread(threading.Thread):
                     })
             elapsed = time.perf_counter() - now
             if elapsed < interval:
-                time.sleep(interval - elapsed)
+                self._stop_event.wait(interval - elapsed)
 
 
 class MillCutWidget(QWidget):
@@ -174,11 +179,10 @@ class MillCutWidget(QWidget):
         self._render_timer = QTimer(self)
         self._render_timer.setInterval(33)
         self._render_timer.timeout.connect(self.update)
-        self._render_timer.start()
         self._worker = AnimationThread(mode='cross' if mode == 'cross' else 'length', chamber=1, fps=30)
         self._user_paused = False
         worker = self._worker
-        self.destroyed.connect(lambda *_: worker.stop())
+        self.destroyed.connect(lambda *_: worker.stop(join_timeout=0.2))
         self._worker.start()
         self.setMinimumHeight(310)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
@@ -190,26 +194,33 @@ class MillCutWidget(QWidget):
 
     def set_paused(self, value: bool) -> None:
         self._user_paused = bool(value)
-        self._worker.pause(value)
-        if value:
+        self._worker.pause(value or not self.isVisible())
+        if value or not self.isVisible():
             self._render_timer.stop()
         else:
             self._render_timer.start()
 
+    def shutdown(self, wait: bool = False) -> None:
+        self._render_timer.stop()
+        self._worker.stop(join_timeout=0.2 if wait else 0.0)
+
     def closeEvent(self, event):
         try:
-            self._worker.stop()
+            self.shutdown(wait=True)
         finally:
             super().closeEvent(event)
 
     def hideEvent(self, event):
         # Paused hidden animations must not consume background CPU.
         self._worker.pause(True)
+        self._render_timer.stop()
         super().hideEvent(event)
 
     def showEvent(self, event):
         self._worker.refresh_parameters()
         self._worker.pause(self._user_paused)
+        if not self._user_paused:
+            self._render_timer.start()
         super().showEvent(event)
 
     def _background(self, painter: QPainter, rect: QRectF):

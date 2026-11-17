@@ -232,9 +232,9 @@ class PlotPanel(QWidget):
 
     def _hour_from_slider(self, value: int):
         hour = self._hour_max * value / 1000.
-        with QSignalBlocker(self.hour_spin):
-            self.hour_spin.setValue(hour)
-        self._update_hour_cursor()
+        # The spin's signal also moves PNG cursors and synchronizes other views.
+        # _hour_from_spin blocks the return signal to the slider.
+        self.hour_spin.setValue(hour)
 
     def _hour_from_spin(self, value: float):
         fraction = value / self._hour_max if self._hour_max else 0.
@@ -715,7 +715,18 @@ class MillWindow(QMainWindow):
             return
         count = self.chamber_count()
         for key in ('ch2', 'ch2d'):
-            self.geometry_fields[key].setEnabled(count == 2)
+            field = self.geometry_fields[key]
+            field.setEnabled(count == 2)
+            # Production UI wraps each numeric field with its slider. Hide
+            # the entire form row, including that wrapper and the help label.
+            row_field = field
+            parent = field.parentWidget()
+            while parent is not None:
+                form = parent.layout()
+                if isinstance(form, QFormLayout) and form.getWidgetPosition(row_field)[0] >= 0:
+                    form.setRowVisible(row_field, count == 2)
+                    break
+                row_field, parent = parent, parent.parentWidget()
         if count == 1 and not self._loading:
             n_removed = 0
             for kind in ('media','manual_reloads'):

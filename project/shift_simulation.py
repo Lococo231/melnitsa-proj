@@ -15,7 +15,8 @@ from math import ceil, isfinite
 
 from model import (MATERIALS, chamber_info, cohort_mass, config_at_time,
                    initial_cohorts, make_weights, mass_kg, quality_at,
-                   throughput_at, validate, piece_count, mass_for_count_t)
+                   throughput_at, validate, piece_count, mass_for_count_t,
+                   canonical_hour)
 from production_planning import PROFILES, profile_name, assessments
 
 METRIC_KEYS = ('r008', 'r0045', 'blaine_proxy')
@@ -49,28 +50,28 @@ def _clock_grid(cfg: dict, observations: int = 130) -> tuple[list[float], set[fl
     # шаг износа по умолчанию равен 10 ч: иначе потеряем границу смены.
     steps = max(original_steps, min(400, ceil(end)))
     obs_steps = min(steps, max(2, observations))
-    observable = {round(end * i / obs_steps, 9) for i in range(obs_steps+1)}
-    ticks = set(round(end * i / steps, 9) for i in range(steps+1)) | observable
+    observable = {canonical_hour(end * i / obs_steps) for i in range(obs_steps+1)}
+    ticks = set(canonical_hour(end * i / steps) for i in range(steps+1)) | observable
     # Границы рабочих дней учитываем отдельно от равномерной сетки.
     for day in range(1, int(cfg.get('simulation_days', 5))+1):
-        t = round(day*float(cfg.get('simulation_hours_per_day',8.)), 9)
+        t = canonical_hour(day*float(cfg.get('simulation_hours_per_day',8.)))
         ticks.add(t)
         observable.add(t)
     # Точные моменты Q и заранее внесённых догрузок, иначе ошибка в интеграле.
     for row in cfg.get('manual_reloads', []):
         if 0 <= row['hour'] <= end:
-            ticks.add(float(row['hour']))
-            observable.add(float(row['hour']))
+            ticks.add(canonical_hour(row['hour']))
+            observable.add(canonical_hour(row['hour']))
     for row in cfg.get('throughput_schedule', []):
         if 0 <= row['hour'] <= end:
-            ticks.add(float(row['hour']))
-            observable.add(float(row['hour']))
+            ticks.add(canonical_hour(row['hour']))
+            observable.add(canonical_hour(row['hour']))
     return sorted(ticks), observable
 
 
 def _install_manual(cfg: dict, cohorts: list[dict], when: float) -> None:
     for idx, r in enumerate(cfg.get('manual_reloads', [])):
-        if abs(float(r['hour']) - when) > 1e-6:
+        if canonical_hour(r['hour']) != canonical_hour(when):
             continue
         item = {**r, 'initial_t': float(r['tons']), 'drum': 1}
         pieces = piece_count(item, item['initial_t'])
@@ -124,12 +125,12 @@ def _calculate(cfg: dict, ticks: list[float], observed: set[float],
                save_states: bool = False):
     results = []
     states = {}
-    end = ticks[-1]
-    ticks = [t for t in ticks if t >= start-1e-7]
+    ticks = sorted({canonical_hour(t) for t in ticks if canonical_hour(t) >= canonical_hour(start)})
+    observed = {canonical_hour(t) for t in observed}
     for i, t in enumerate(ticks):
         # Ручная догрузка при t = h применяется до контроля состояния.
         _install_manual(cfg, cohorts, t)
-        if action is not None and abs(t-action['hour']) < 1e-6:
+        if action is not None and t == canonical_hour(action['hour']):
             _change_media(cfg, cohorts, action)
         if t in observed or i == 0 or i == len(ticks)-1:
             entry = _quality_row(cfg, cohorts, t)
@@ -138,7 +139,7 @@ def _calculate(cfg: dict, ticks: list[float], observed: set[float],
                 states[t] = deepcopy(cohorts)
             if stop_at_first_bad and not entry['ok']:
                 return results, states
-        if t < end-1e-9:
+        if i < len(ticks)-1:
             _wear_step(cfg, cohorts, ref_w, t, ticks[i+1])
     return results, states
 
@@ -314,7 +315,7 @@ def simulate_shifts(cfg: dict, optimize: bool = True,
     # действие предлагается до запуска. Время всегда лежит на расчётной сетке.
     when = base_rows[max(0, idx-1)]['hour']
     start_cohorts = deepcopy(base_states[when])
-    remaining = [t for t in grid if t >= when - 1e-7]
+    remaining = [t for t in grid if t >= when]
     # Проверяем качество на каждом из предусмотренных контрольных моментов.
     observed = {r['hour'] for r in base_rows if r['hour'] >= when}
     observed.add(when)
@@ -326,15 +327,19 @@ def simulate_shifts(cfg: dict, optimize: bool = True,
     if len(all_observed)>1:
         coarse_observed.add(all_observed[1])
     shadow = {**cfg, 'manual_reloads': [r for r in cfg.get('manual_reloads', [])
-                                       if r['hour'] > when+1e-7]}
+                                       if canonical_hour(r['hour']) > when]}
     shortlist = []
     for n, action in enumerate(_candidates(cfg, start_cohorts, when)):
         if n >= candidate_limit:
             break
         trial = deepcopy(start_cohorts)
         try:
+            _change_media(cfg, trial, action)
+            if any(not MIN_FILL <= chamber['fill_j'] <= MAX_FILL
+                   for chamber in chamber_info(cfg, trial)):
+                continue
             rows, _ = _calculate(shadow, remaining, coarse_observed, ref, trial,
-                                 start=when, action=action, stop_at_first_bad=True)
+                                 start=when, stop_at_first_bad=True)
         except (ValueError, ArithmeticError, OverflowError):
             continue
         outcome['evaluated'] += 1
@@ -369,7 +374,7 @@ def simulate_shifts(cfg: dict, optimize: bool = True,
     suffix, _ = _calculate(shadow, remaining, observed, ref,
                             deepcopy(start_cohorts), start=when, action=action)
     # Сравнение строго на общей оси: до вмешательства обе траектории совпадают.
-    prefix = [r for r in base_rows if r['hour'] < when-1e-7]
+    prefix = [r for r in base_rows if r['hour'] < when]
     outcome['optimized'] = prefix + suffix
     outcome['action'] = {**action, 'valid_hours':top['valid_hours'],
                          'valid_to':when+top['valid_hours']}

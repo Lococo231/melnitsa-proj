@@ -35,6 +35,18 @@ class SimSignals(QObject):
     completed = Signal(int, object)
     failed = Signal(int, str)
 
+
+def request_simulation_refresh(window):
+    """Automatic result refresh must respect the explicit-run live workflow."""
+    if getattr(window, '_live_controller', None) is not None:
+        if not getattr(window, '_sim_running', False):
+            window.sim_status.setText(
+                'Изменены исходные данные. Нажмите «Пуск», чтобы рассчитать '
+                'новый отрезок и подобрать коррекции.')
+        return
+    window._sim_timer.start()
+
+
 class SimJob(QRunnable):
     def __init__(self, number, cfg, signals):
         super().__init__()
@@ -426,10 +438,13 @@ def install(MillWindow):
 
     def draw_results(self,cfg,run,quality,recommendation):
         previous_draw(self,cfg,run,quality,recommendation)
+        if getattr(self, '_live_controller', None) is not None:
+            # schedule()/load/run own invalidation. A late preview for the same
+            # inputs must not invalidate an already completed explicit run.
+            return
         self._sim_dirty=True
         if self.right.tabs.currentIndex()==self.sim_tab_index and not self._loading:
-            self.sim_status.setText('Пересчёт сценариев после изменения входных параметров…')
-            self._sim_timer.start()
+            request_simulation_refresh(self)
 
     def render_active(self):
         if self.right.tabs.currentIndex()==self.sim_tab_index:
@@ -437,7 +452,7 @@ def install(MillWindow):
                 _sim_plot(self,self._sim_result)
                 _render_summary(self,self._sim_result)
             elif not self._loading and not self._sim_timer.isActive():
-                self._sim_timer.start()
+                request_simulation_refresh(self)
             return
         previous_render(self)
 
