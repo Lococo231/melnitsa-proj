@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (
 )
 
 import production_ui
+from workflow_ui import request_simulation_refresh
 from production_planning import starting_media
 from workspace_ui import _visible_page
 
@@ -193,7 +194,7 @@ def install(MillWindow):
             if getattr(window, "_sim_dirty", False) and not window._loading:
                 timer = getattr(window, "_sim_timer", None)
                 if timer is not None and not timer.isActive():
-                    timer.start()
+                    request_simulation_refresh(window)
             window._draw_fractions()
 
     def build(window):

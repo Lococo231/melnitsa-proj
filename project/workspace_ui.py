@@ -187,6 +187,16 @@ def _recommendation_view(window, result):
     window.sim_apply.setText('Применить план догрузки/выгрузки')
 
 
+def invalidate_recommendations(window):
+    if hasattr(window, '_workspace_recommendation_title'):
+        window._workspace_recommendation_title.setText(
+            'Исходные данные изменены — рекомендации устарели.')
+        window._workspace_recommendation_reason.setText(
+            'Нажмите «Пуск», чтобы рассчитать новый отрезок и подобрать '
+            'план для текущих параметров.')
+        window.reco_table.setRowCount(0)
+
+
 def install(MillWindow):
     """Attach last, after multicore_ui.install(MillWindow)."""
     if getattr(MillWindow,'_workspace_installed',False):
@@ -423,14 +433,9 @@ def install(MillWindow):
                     continue
                 if hour > panel.hour_spin.maximum():
                     continue  # inactive plot has an older/smaller horizon
-                with QSignalBlocker(panel.hour_spin):
-                    panel.hour_spin.setValue(hour)
-                panel._hour_from_spin(hour)
-                if hasattr(panel,'_multicore_images'):
-                    for image in panel._multicore_images:
-                        image.set_hour(hour)
-                if hasattr(panel,'_workspace_image'):
-                    panel._workspace_image.set_hour(hour)
+                # The guard above prevents recursion. Let every image listener
+                # receive the signal, including the single-fraction PNG view.
+                panel.hour_spin.setValue(hour)
         finally:
             self._workspace_cursor_updating=False
 
@@ -473,15 +478,16 @@ def install(MillWindow):
                 _overview_plot(self,result)
             else:
                 self._workspace_overview_hint.setText(
-                    'Изменены исходные данные. Пересчитывается общая хронология работы…')
+                    'Изменены исходные данные. Рассчитывается предварительный обзор; '
+                    'для нового отрезка симуляции нажмите «Пуск».')
                 if not getattr(self,'_loading',False) and not self._sim_timer.isActive():
-                    self._sim_timer.start()
+                    workflow_ui.request_simulation_refresh(self)
             return
         if index==3:
             if ready:
                 _recommendation_view(self,result)
             elif not getattr(self,'_loading',False) and not self._sim_timer.isActive():
-                self._sim_timer.start()
+                workflow_ui.request_simulation_refresh(self)
             return
         if index==self.timeline_editor_index:
             if ready:
@@ -490,11 +496,11 @@ def install(MillWindow):
                 # it now points to the same read-only journal tab.
                 timeline_ui._timeline_history_plot(self,result)
             elif not getattr(self,'_loading',False) and not self._sim_timer.isActive():
-                self._sim_timer.start()
+                workflow_ui.request_simulation_refresh(self)
             return
         if index==2 and not ready:
             if not getattr(self,'_loading',False) and not self._sim_timer.isActive():
-                self._sim_timer.start()
+                workflow_ui.request_simulation_refresh(self)
             return
         return original_render(self)
 

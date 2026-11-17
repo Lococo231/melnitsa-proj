@@ -148,10 +148,23 @@ def _size_differs(previous, desired):
     return any(abs(a-b) >= max(65, a*.20) for a,b in zip(previous, desired))
 
 
+def _sync_fraction_generation(window):
+    generation = getattr(window, '_sim_generation', None)
+    if getattr(window, '_fraction_generation', None) != generation:
+        # Cleared queued work emits no completion, and a failed image from an
+        # old result must not suppress the new request before it is submitted.
+        window._fraction_generation = generation
+        window._fraction_working = False
+        window._fraction_requested = None
+        getattr(window, '_fraction_sizes', {}).clear()
+        getattr(window, '_fraction_failures', set()).clear()
+
+
 def _show_one_fraction(panel, result, group, parts):
     if not group.startswith('fraction_'):
         return _show_one_fraction._original(panel, result, group, parts)
     window = panel.window()
+    _sync_fraction_generation(window)
     stages = getattr(window, '_media_stages', None)
     if stages is not None and stages.currentIndex() != 1:
         # A hidden wear chart must not start a new expensive render.
@@ -320,6 +333,7 @@ def install(MillWindow):
         window._fraction_sizes = {}
         window._fraction_failures = set()
         window._fraction_working = False
+        window._fraction_generation = None
         window._fraction_requested = None
         window._adaptive_layout_timer = QTimer(window)
         window._adaptive_layout_timer.setSingleShot(True)
@@ -359,6 +373,7 @@ def install(MillWindow):
         _reflow_forms(window)
 
     def request_fraction(window,key,result,size):
+        _sync_fraction_generation(window)
         if getattr(window,'_fraction_working',False):
             return
         if not hasattr(window,'_chart_pool'):
@@ -371,9 +386,11 @@ def install(MillWindow):
             window._sim_generation, key, result, size, window._sim_signals))
 
     def _finished_fraction(window,n,g,failed,error=''):
-        if g != 'fraction' or n != getattr(window, '_sim_generation', -1):
+        if g != 'fraction' or n != getattr(window, '_fraction_generation', None):
             return
         window._fraction_working=False
+        if n != getattr(window, '_sim_generation', -1):
+            return
         if failed:
             key = window._fraction_requested[0] if window._fraction_requested else None
             if key:
@@ -399,6 +416,7 @@ def install(MillWindow):
         # A new timeline invalidates pending resize render requests.
         if getattr(window,'_adaptive_ready',False):
             window._fraction_working=False
+            window._fraction_generation=None
             window._fraction_sizes.clear()
             window._fraction_failures.clear()
         return old_schedule(window,*args)

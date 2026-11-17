@@ -18,7 +18,7 @@ import os
 
 from model import (MATERIALS, mass_kg, piece_count, initial_cohorts, cohort_mass,
                    chamber_info, throughput_at, quality_at, config_at_time,
-                   coefficient_at)
+                   coefficient_at, canonical_hour)
 from production_planning import PROFILES, profile_name, assessments
 from shift_simulation import (_clock_grid, _wear_step, _install_manual,
                               _reference_weight, _candidates, _change_media,
@@ -38,7 +38,7 @@ PARAMETERS = {
 
 
 def _at_hour(event: dict) -> float:
-    return float(event['hour'])
+    return canonical_hour(event['hour'])
 
 
 def _find_group(c: dict, target: dict) -> bool:
@@ -80,7 +80,7 @@ def _validate_events(cfg: dict, horizon: float) -> None:
             raise ValueError(f'{name}: требуется список не более 200 записей')
         total += len(rows)
         for event in rows:
-            h = _at_hour(event)
+            h = float(event['hour'])
             if not math.isfinite(h) or h < 0 or h > horizon:
                 raise ValueError(f'{name}: час изменения должен быть в пределах 0–{horizon:g}')
     if total > 300:
@@ -221,10 +221,12 @@ def _perform(cfg: dict, times: list[float], observed: set[float],
     logs = {'cement_changes': [], 'media_changes': [], 'parameter_changes': []}
     wear_cumulative_t = 0. if resume is None else float(resume[2])
     days_hours = float(operating.get('simulation_hours_per_day', 8))
+    times = sorted({canonical_hour(t) for t in times})
+    observed = {canonical_hour(t) for t in observed}
     for idx, now in enumerate(times):
         if resume is None or idx > 0:
             manual = [entry for entry in operating.get('manual_reloads', [])
-                      if abs(float(entry['hour'])-now)<1e-6]
+                      if _at_hour(entry) == now]
             manual_targets = {}
             for rr in manual:
                 target = {k:rr[k] for k in ('chamber','type','material','diameter_mm')}
@@ -243,7 +245,7 @@ def _perform(cfg: dict, times: list[float], observed: set[float],
                     'Было, т':before_t,'Стало, т':after_t,
                     'Изменение, т':after_t-before_t,'Изменение, шт':after_n-before_n})
             for event in operating.get('parameter_events', []):
-                if abs(_at_hour(event) - now) > 1e-6: continue
+                if _at_hour(event) != now: continue
                 key = event['parameter']
                 after = float(event['value'])
                 before = _set_parameter(operating, key, after)
@@ -252,7 +254,7 @@ def _perform(cfg: dict, times: list[float], observed: set[float],
                     'Переменная': PARAMETERS[key][0], 'Было': before,
                     'Стало': after, 'Единица': PARAMETERS[key][1]})
             for event in operating.get('cement_events', []):
-                if abs(_at_hour(event) - now) > 1e-6: continue
+                if _at_hour(event) != now: continue
                 before = profile_name(operating)
                 after = event['profile']
                 # Смена марки сама по себе меняет ТРЕБОВАНИЯ, а не мгновенно
@@ -270,7 +272,7 @@ def _perform(cfg: dict, times: list[float], observed: set[float],
                         'Марка после': after, 'Значение после': float(after_quality[key]),
                         'Цели после': _range_label(PROFILES[after].get(key))})
             for event in operating.get('media_events', []):
-                if abs(_at_hour(event) - now) > 1e-6: continue
+                if _at_hour(event) != now: continue
                 target = event['target']
                 before_t = _group_mass(cohorts, target)
                 before_n = _group_count(cohorts, target)
@@ -286,7 +288,7 @@ def _perform(cfg: dict, times: list[float], observed: set[float],
                     'Изменение, шт': after_n-before_n})
         planned_actions = actions if actions is not None else ([action] if action else [])
         for planned in planned_actions:
-            if abs(now - float(planned['hour'])) > 1e-6:
+            if now != _at_hour(planned):
                 continue
             target = planned['target']
             before_t = _group_mass(cohorts, target)
@@ -356,9 +358,9 @@ def _violation_distance(row: dict, cfg: dict) -> float:
     return err
 
 
-def _eval_trial(indexed_actions):
+def _evaluate_trial(indexed_actions, context):
     index, actions = indexed_actions
-    operating, cohorts, wear_t, times, observed, reference, start, end = _PROCESS_CONTEXT
+    operating, cohorts, wear_t, times, observed, reference, start, end = context
     try:
         records, _, _ = _perform(operating, times, observed, reference,
                                  actions=actions, resume=(operating, cohorts, wear_t),
@@ -372,6 +374,11 @@ def _eval_trial(indexed_actions):
     distance = _violation_distance(failing, operating) if failing else 0.
     return index, {'duration': max(0., duration), 'distance': distance,
                    'error': False}
+
+
+def _eval_trial(indexed_actions):
+    """Process worker entry point; local callers pass their context explicitly."""
+    return _evaluate_trial(indexed_actions, _PROCESS_CONTEXT)
 
 
 class _TrialExecutor:
@@ -389,7 +396,6 @@ class _TrialExecutor:
         self.actual_workers = 1
         self.warning = None
         self.pool = None
-        _init_trial_worker(*self.context)
 
     def __enter__(self):
         if self.workers > 1:
@@ -420,8 +426,7 @@ class _TrialExecutor:
                 self.pool.shutdown(wait=True, cancel_futures=True)
                 self.pool = None
                 self.actual_workers = 1
-                _init_trial_worker(*self.context)
-        return [_eval_trial(job) for job in jobs]
+        return [_evaluate_trial(job, self.context) for job in jobs]
 
 
 def _group_signature(action: dict) -> tuple:
@@ -529,7 +534,7 @@ def simulate_operation_timeline(cfg: dict, *, optimize: bool = True,
     ticks, observed = _clock_grid(cfg, observations)
     for category in ('cement_events', 'media_events', 'parameter_events'):
         for event in cfg.get(category, []):
-            t = round(_at_hour(event), 9)
+            t = _at_hour(event)
             ticks.append(t)
             observed.add(t)
     ticks = sorted(set(ticks))
@@ -568,8 +573,8 @@ def simulate_operation_timeline(cfg: dict, *, optimize: bool = True,
     when = baseline[max(0, ix-1)]['hour']
     snap = (runtime_states[when], states[when],
             baseline[max(0, ix-1)]['wear_cumulative_t'])
-    remaining = [t for t in ticks if t >= when-1e-7]
-    observed_remaining = {t for t in observed if t >= when-1e-7} | {when}
+    remaining = [t for t in ticks if t >= when]
+    observed_remaining = {t for t in observed if t >= when} | {when}
     raw = [{**cand, 'hour': when}
            for cand in _candidates(snap[0], snap[1], when)]
     candidates = _grouped_candidate_subset(raw, max(1, candidate_limit))
@@ -584,7 +589,11 @@ def simulate_operation_timeline(cfg: dict, *, optimize: bool = True,
         single_scores = executor.evaluate(singles)
         evaluated += len(single_scores)
         result['search_levels']['singles'] = len(single_scores)
-        best = _select_best(best, singles, single_scores)
+        # Keep every scored single as a possible combination seed, but accept
+        # it alone only when actual filling of ALL chambers is admissible.
+        eligible_single_scores = [(idx, metric) for idx, metric in single_scores
+                                  if _combo_fill_ok(snap[0], snap[1], singles[idx])]
+        best = _select_best(best, singles, eligible_single_scores)
         _emit(progress_callback, 'singles', {'evaluated': evaluated,
              'best_hours': best['metric']['duration'] if best else 0.,
              'workers': executor.actual_workers})
@@ -662,7 +671,7 @@ def simulate_operation_timeline(cfg: dict, *, optimize: bool = True,
     actions = best['actions']
     suffix, _, _ = _perform(snap[0], remaining, observed_remaining, reference,
                             actions=actions, resume=snap)
-    prefix = [row for row in baseline if row['hour'] < when-1e-7]
+    prefix = [row for row in baseline if row['hour'] < when]
     result['optimized'] = prefix + suffix
     result['actions'] = [{**a, 'valid_hours':best['metric']['duration'],
                           'valid_to':when+best['metric']['duration']} for a in actions]

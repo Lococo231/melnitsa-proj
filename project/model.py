@@ -58,6 +58,11 @@ def default_config() -> dict:
     )
 
 
+def canonical_hour(hour: float) -> float:
+    """One time resolution for grids and events: nine decimal places in hours."""
+    return round(float(hour), 9)
+
+
 def validate(cfg: dict) -> None:
     if len(cfg.get("mills",[])) != 1:
         raise ValueError("В модели предусмотрен один барабан с одной или двумя камерами")
@@ -90,6 +95,9 @@ def validate(cfg: dict) -> None:
     if not sieves or len(sieves)>20 or any(not isinstance(x,(int,float)) or not math.isfinite(x) or not 0.01<=x<=80 for x in sieves) or len(sieves)!=len(set(sieves)):
         raise ValueError("Выберите от 1 до 20 разных сит в диапазоне 0,01–80 мм")
     for rr in cfg.get("manual_reloads",[]):
+        hour = float(rr.get("hour", 0.))
+        if not math.isfinite(hour) or hour < 0:
+            raise ValueError("Час догрузки должен быть конечным и неотрицательным")
         if int(rr["drum"])!=1 or int(rr["chamber"])>len(cfg["mills"][0]["chambers"]) or int(rr["chamber"])<1:
             raise ValueError("Догрузка должна относиться к существующей камере одного барабана")
         if rr["tons"]<=0 or rr["diameter_mm"]<=0 or rr["type"] not in ("Шары","Цильпебс") or rr["material"] not in MATERIALS:
@@ -145,7 +153,7 @@ def throughput_at(cfg:dict, hour:float) -> float:
     """Заданная подача в данный момент; без выдуманной связи с износом."""
     q=throughput(cfg)['product_tph']
     for row in sorted(cfg.get('throughput_schedule',[]),key=lambda r:r['hour']):
-        if row['hour']>hour+1e-9:break
+        if canonical_hour(row['hour']) > canonical_hour(hour):break
         q=float(row['tph'])
     return q
 
@@ -318,28 +326,25 @@ def simulate_wear(cfg:dict) -> dict:
     w_ref=sum(ref_weights)
     if w_ref<=0: raise ValueError("Нет мелющих тел выше диаметра выбраковки")
     initial_mass=sum(cohort_mass(c) for c in cohorts)
-    hist=[snapshot(cohorts,cfg,0,0,0,throughput_at(cfg,0))]
-    d0,m0=fractions_at(cohorts,0)
-    diam_history=[d0]
-    fraction_mass_history=[m0]
-    coefficient_history=[coefficient_at(cfg,cohorts,w_ref,0)]
+    hist=[]
+    diam_history=[]
+    fraction_mass_history=[]
+    coefficient_history=[]
     events=[]
-    scheduled=sorted(cfg.get("manual_reloads",[]),key=lambda v:v.get("hour",0))
+    scheduled=sorted(cfg.get("manual_reloads",[]),key=lambda v:canonical_hour(v.get("hour",0)))
     scheduled_index=0
     loss_sum=0.0
     horizon=float(cfg["horizon_h"])
     steps=max(1,math.ceil(horizon/max(cfg["step_h"],horizon/400 if horizon else .01)))
-    grid={0.,horizon}
-    grid.update(horizon*k/steps for k in range(1,steps))
-    grid.update(float(r['hour']) for r in scheduled if 0<r['hour']<horizon)
-    grid.update(float(r['hour']) for r in cfg.get('throughput_schedule',[]) if 0<r['hour']<horizon)
+    grid={0.,canonical_hour(horizon)}
+    grid.update(canonical_hour(horizon*k/steps) for k in range(1,steps))
+    grid.update(canonical_hour(r['hour']) for r in scheduled if 0<r['hour']<horizon)
+    grid.update(canonical_hour(r['hour']) for r in cfg.get('throughput_schedule',[]) if 0<r['hour']<horizon)
     times=sorted(grid)
     production_sum=0.
-    for t0,t1 in zip(times,times[1:]):
-        dt=t1-t0
-        Q=throughput_at(cfg,t0)
+    for index,t0 in enumerate(times):
         # Добавленные тела — новая партия с НАЧАЛЬНЫМ диаметром
-        while scheduled_index<len(scheduled) and scheduled[scheduled_index].get("hour",0)<=t0+1e-9:
+        while scheduled_index<len(scheduled) and canonical_hour(scheduled[scheduled_index].get("hour",0))<=t0:
             rr=scheduled[scheduled_index];scheduled_index+=1
             if rr.get("tons",0)<=0:continue
             row=media_row(int(rr["drum"]),int(rr["chamber"]),float(rr["diameter_mm"]),float(rr["tons"]),rr["type"],rr["material"],float(rr.get("aspect",1)))
@@ -349,6 +354,17 @@ def simulate_wear(cfg:dict) -> dict:
             actual_t = mass_for_count_t(row, number)
             cohorts.append({**row,"initial_t":actual_t,"id":len(cohorts),"batch":scheduled_index,"n":number,"d":row["diameter_mm"],"d0":row["diameter_mm"],"initial_kg":actual_t*1000,"cumulative_loss_kg":0})
             events.append({"hour":t0,**row,"tons":actual_t,"count":number})
+        # Every boundary snapshot is post-event, including 0 and the horizon.
+        hist.append(snapshot(cohorts,cfg,t0,production_sum,loss_sum,throughput_at(cfg,t0)))
+        dh,mh=fractions_at(cohorts,t0)
+        diam_history.append(dh)
+        fraction_mass_history.append(mh)
+        coefficient_history.append(coefficient_at(cfg,cohorts,w_ref,t0))
+        if index == len(times)-1:
+            break
+        t1=times[index+1]
+        dt=t1-t0
+        Q=throughput_at(cfg,t0)
         infos=chamber_info(cfg,cohorts)
         wts=make_weights(cfg,cohorts,infos)
         # dM = Q*dt * GMCR_ref [g/t] /1000 [g/kg] * relative contact area, kg
@@ -368,20 +384,6 @@ def simulate_wear(cfg:dict) -> dict:
                 c["removed_kg"]=c.get("removed_kg",0)+rem
                 c["n"]=0
         production_sum+=Q*dt
-        hist.append(snapshot(cohorts,cfg,t1,production_sum,loss_sum,throughput_at(cfg,t1)))
-        dh,mh=fractions_at(cohorts,t1)
-        diam_history.append(dh)
-        fraction_mass_history.append(mh)
-        coefficient_history.append(coefficient_at(cfg,cohorts,w_ref,t1))
-    for rr in scheduled[scheduled_index:]:
-        if rr.get("hour",0)<=horizon:
-            row = media_row(int(rr['drum']),int(rr['chamber']),float(rr['diameter_mm']),
-                            float(rr['tons']),rr['type'],rr['material'],
-                            float(rr.get('aspect',1.)))
-            number = piece_count(row, float(rr['tons']))
-            if number:
-                events.append({**rr,"hour":rr["hour"],"tons":mass_for_count_t(row,number),
-                               "count":number})
     # строка на каждую исходную фракцию: накопленные массы, а не только первый cohort
     result=[]
     for c in cohorts:
@@ -512,6 +514,8 @@ def operating_bond_index(power_kw:float,product_tph:float,f80_um:float,p80_um:fl
 
 def quality_at(cfg:dict, cohorts:list[dict], samples:int=14) -> dict:
     """Демонстрационная кинетическая схема; не выдаёт лабораторный результат без калибровки."""
+    if isinstance(samples, bool) or not isinstance(samples, int) or samples < 1:
+        raise ValueError('Количество проб должно быть положительным целым числом')
     infos=chamber_info(cfg,cohorts)
     Q=throughput(cfg)["mill_feed_tph"]
     residence_min=60*cfg["material_hold_t"]/Q
@@ -526,7 +530,9 @@ def quality_at(cfg:dict, cohorts:list[dict], samples:int=14) -> dict:
             x+=cfg["mills"][0]["diaphragm_m"]
             pts.append(dict(position_m=x,comp=comps.copy(),drum=1,chamber=z["chamber"]))
         fraction=z["volume_m3"]/total_v
-        steps=max(30,math.ceil(samples*z["length_m"]/total_L)*5)
+        # Preserve the original default-14 integration grid for every caller.
+        # Displaying fewer/more samples must never change the product quality.
+        steps=max(30,math.ceil(14*z["length_m"]/total_L)*5)
         tm=residence_min*fraction
         sub=z["cohorts"]
         crit=42.3/math.sqrt(z["diameter_m"])
@@ -552,7 +558,8 @@ def quality_at(cfg:dict, cohorts:list[dict], samples:int=14) -> dict:
             pts.append(dict(position_m=x,comp=comps.copy(),drum=z["drum"],chamber=z["chamber"]))
     sample_pts=[]
     for i in range(samples):
-        pos=0.25+i*(max(0.3,cfg["mills"][0]["length_m"]-0.5))/(samples-1)
+        pos=(cfg["mills"][0]["length_m"]/2 if samples == 1 else
+             0.25+i*(max(0.3,cfg["mills"][0]["length_m"]-0.5))/(samples-1))
         p=min(pts,key=lambda r:abs(r["position_m"]-pos))
         sample_pts.append({"Точка":i+1,"Расстояние по камерам, м":round(pos,3),
                            "Барабан":p.get("drum",1),"Камера":p.get("chamber",1),

@@ -24,6 +24,7 @@ from PySide6.QtWidgets import (
 
 import workflow_ui
 import workspace_ui
+import timeline_ui
 from operator_export import save_selected_export
 
 SIM_KEYS = {
@@ -133,13 +134,25 @@ def _offset_rows(rows: list[dict], offset: float, key='hour') -> list[dict]:
     return out
 
 
-def _offset_table_rows(rows: list[dict], offset: float, key='Час наработки') -> list[dict]:
+def _offset_table_rows(rows: list[dict], offset: float, key='Час наработки',
+                       day_offset: float = 0.0,
+                       hours_per_day: float | None = None) -> list[dict]:
     out = []
     for row in rows or []:
         nr = deepcopy(row)
         if key in nr:
             try:
-                nr[key] = float(nr[key]) + offset
+                local_hour = float(nr[key])
+                nr[key] = local_hour + offset
+                if 'День / час' in nr and hours_per_day and hours_per_day > 0:
+                    day = int(max(0.0, local_hour) // hours_per_day) + 1
+                    within = max(0.0, local_hour) % hours_per_day
+                    if local_hour > 0 and abs(within) < 1e-8:
+                        day -= 1
+                        within = hours_per_day
+                    nr['День / час'] = (
+                        f'день {int(day_offset) + day}, '
+                        f'час {within:g} из {hours_per_day:g}')
             except Exception:
                 pass
         out.append(nr)
@@ -153,6 +166,8 @@ def _combine_segments(segments: list[dict]) -> dict | None:
         'baseline': [],
         'optimized': [],
         'cement_changes': [],
+        'media_changes': [],
+        'parameter_changes': [],
         'actions': [],
         'hours': 0.0,
         'days': 0.0,
@@ -172,7 +187,10 @@ def _combine_segments(segments: list[dict]) -> dict | None:
             nr = deepcopy(row)
             nr['hour'] = float(nr.get('hour', 0.0)) + offset
             total['optimized'].append(nr)
-        total['cement_changes'].extend(_offset_table_rows(result.get('cement_changes') or [], offset))
+        for journal in ('cement_changes', 'media_changes', 'parameter_changes'):
+            total[journal].extend(_offset_table_rows(
+                result.get(journal) or [], offset, day_offset=days,
+                hours_per_day=float(result.get('hours_per_day', 0) or 0)))
         actions = result.get('actions') or ([] if result.get('action') is None else [result['action']])
         for action in actions:
             na = deepcopy(action)
@@ -332,11 +350,20 @@ class ExportDialog(QDialog):
             self.info.setText('Выберите хотя бы один набор данных для выгрузки.')
             return
         suffix = '.xlsx' if self.format_combo.currentIndex() == 0 else '.json'
-        path, _ = QFileDialog.getSaveFileName(self, 'Сохранить экспорт', str(Path.home() / f'melnitsa_export{suffix}'))
+        file_filter = 'Excel (*.xlsx)' if suffix == '.xlsx' else 'JSON (*.json)'
+        path, _ = QFileDialog.getSaveFileName(
+            self, 'Сохранить экспорт',
+            str(Path.home() / f'melnitsa_export{suffix}'), file_filter)
         if not path:
             return
+        path = Path(path)
+        if not path.suffix:
+            path = path.with_suffix(suffix)
+        elif path.suffix.lower() != suffix:
+            self.info.setText(f'Для выбранного формата укажите расширение {suffix}.')
+            return
         try:
-            export_selected(self.window, selected, Path(path))
+            export_selected(self.window, selected, path)
         except Exception as exc:
             QMessageBox.warning(self, 'Ошибка экспорта', str(exc))
             return
@@ -365,10 +392,28 @@ def export_selected(window, selected: list[str], path: Path):
         payload['sim_status'] = [{'Результат проверки': window.sim_status.text()}]
     if 'recommendations' in selected:
         payload['recommendations'] = _table_to_rows(window.reco_table)
-    if 'sample_table' in selected:
-        payload['sample_table'] = _table_to_rows(window.sample_table)
-    if 'start_table' in selected:
-        payload['start_table'] = _table_to_rows(window.start_table)
+    if 'sample_table' in selected or 'start_table' in selected:
+        # These views are populated lazily. Export the last calculated model
+        # even if the operator has never opened the corresponding tabs.
+        from production_planning import starting_media
+        from production_ui import _fmt
+        active = getattr(window, '_active_payload', None)
+        cfg = active[0] if active is not None else window.config_data
+        quality = (active[2] if active is not None else
+                   getattr(window, 'quality_data', None)) or {}
+        if 'sample_table' in selected:
+            columns = (['Точка', 'Расстояние по камерам, м', 'Камера'] +
+                       [f'R{s:g}, %' for s in cfg['sieves_mm']])
+            payload['sample_table'] = [
+                {column.replace('.', ','): _fmt(row.get(column, ''))
+                 for column in columns}
+                for row in quality.get('samples', [])
+            ]
+        if 'start_table' in selected:
+            payload['start_table'] = [
+                {column: _fmt(value) for column, value in row.items()}
+                for row in starting_media(cfg)
+            ]
     if 'journal_tables' in selected:
         payload['journal_initial'] = _table_to_rows(window._workspace_initial)
         payload['journal_tables'] = {k: _table_to_rows(v) for k, v in getattr(window, '_workspace_log_tables', {}).items()}
@@ -385,6 +430,20 @@ def install(MillWindow):
     old_build = MillWindow._build
     old_done = MillWindow._sim_done
     old_fail = MillWindow._sim_fail
+    old_journal_view = workspace_ui._journal_view
+    old_history_plot = timeline_ui._timeline_history_plot
+
+    def journal_view(window, result):
+        # Journal tables and their exports describe all recorded runs. Keep
+        # the latest segment result separate for recommendations/application.
+        combined = getattr(window, '_session_history_result', None)
+        if combined is None:
+            combined = _combine_segments(getattr(window, '_sim_segments', []))
+        return old_journal_view(window, combined or result)
+
+    def history_plot(window, result):
+        return old_history_plot(
+            window, getattr(window, '_session_history_result', None) or result)
 
     def _hide_helper_headings(window):
         texts = {
@@ -527,6 +586,7 @@ def install(MillWindow):
         window._segment_log_frame = box
         window._segment_table = table
         window._sim_segments = []
+        window._session_history_result = None
         window._segment_capture_requested = False
         # run button hooks
         run_btn = _find_run_button(window)
@@ -640,7 +700,6 @@ def install(MillWindow):
         _refresh_segment_log(self)
 
     def sim_done(self, n, result):
-        old_done(self, n, result)
         if n != getattr(self, '_sim_generation', -1):
             return
         if (getattr(self, '_segment_capture_requested', False)
@@ -662,7 +721,11 @@ def install(MillWindow):
                 offset += float(seg['result'].get('hours', 0.0) or 0.0)
                 seg['_offset_end'] = offset
             self._segment_capture_requested = False
+            # Publish the common result before older completion handlers can
+            # request history images for this generation.
+            self._session_history_result = _combine_segments(self._sim_segments)
             _refresh_segment_log(self)
+        old_done(self, n, result)
         if self.right.tabs.currentIndex() == self.sim_tab_index:
             _plot_simulation(self, _current_result_for_sim(self))
 
@@ -674,3 +737,5 @@ def install(MillWindow):
     MillWindow._build = build
     MillWindow._sim_done = sim_done
     MillWindow._sim_fail = sim_fail
+    workspace_ui._journal_view = journal_view
+    timeline_ui._timeline_history_plot = history_plot

@@ -319,10 +319,14 @@ def install(MillWindow):
         images,workers,warning=data
         window._charts_loading.pop(group,None)
         result=getattr(window,'_timeline_outcome',None)
+        history = group in ('history', 'adaptive:history')
+        if history:
+            result = getattr(window, '_session_history_result', None) or result
         if result is None:
             return
         result.setdefault('_plot_images',{}).update(images)
-        window._sim_result=result
+        if not history:
+            window._sim_result=result
         index=window.right.tabs.currentIndex()
         if group=='history' and index==window.history_index:
             plot_history(window,result)
@@ -339,6 +343,8 @@ def install(MillWindow):
         window._charts_loading.pop(group,None)
         window.statusBar().showMessage('Ошибка фонового рендеринга: '+error,15000)
         result=getattr(window,'_timeline_outcome',None)
+        if group == 'history':
+            result = getattr(window, '_session_history_result', None) or result
         if result is None:
             return
         if group=='history':_fallback_panel(window.history_plot,lambda:original_history(window,result))
